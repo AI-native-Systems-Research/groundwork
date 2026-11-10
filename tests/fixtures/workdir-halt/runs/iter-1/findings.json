@@ -1,0 +1,31 @@
+{
+  "hypotheses": [
+    {
+      "id": "H1",
+      "status": "PARTIALLY_CONFIRMED",
+      "partial_note": "holds on W1-W3 only",
+      "error_type": "regime",
+      "evidence": [
+        {
+          "path": "results/R1.json",
+          "key": "/capacity",
+          "value": 1.2
+        }
+      ]
+    },
+    {
+      "id": "H2",
+      "status": "REFUTED",
+      "error_type": "direction",
+      "evidence": [
+        {
+          "path": "results/R1.json",
+          "key": "/capacity",
+          "value": 1.2
+        }
+      ]
+    }
+  ],
+  "question_answered": false,
+  "reason": "W4 not measured yet"
+}

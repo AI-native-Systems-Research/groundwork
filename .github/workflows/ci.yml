@@ -1,0 +1,77 @@
+# INACTIVE until the repo is published to GitHub (finding F3 in
+# docs/implementation-plan-v2.md). Until then, run the same four jobs locally:
+#   scripts/ci-local.sh
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install pyyaml
+      - run: python -m unittest discover tests
+
+  spec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Official Agent Skills reference validator. The PyPI release (0.1.1)
+      # installs the console script as `agentskills`; newer source renames it
+      # `skills-ref`, so try both.
+      - run: pip install pyyaml skills-ref==0.1.1
+      - name: skills-ref validate
+        run: |
+          if command -v skills-ref >/dev/null; then skills-ref validate skills/investigation
+          else agentskills validate skills/investigation; fi
+      # Covers what skills-ref does not: SKILL.md < 500 lines, metadata string->string.
+      - run: python scripts/check_skill_spec.py skills/investigation
+
+  install-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: pip install pyyaml
+      - name: install the skill from this checkout into a throwaway repo
+        run: |
+          tmp="$(mktemp -d)"
+          cd "$tmp"
+          git init -q
+          npx -y skills add "$GITHUB_WORKSPACE" --skill investigation -a claude-code -y
+          for d in scripts references assets; do
+            test -d ".claude/skills/investigation/$d" || { echo "missing .claude/skills/investigation/$d"; exit 1; }
+          done
+          python3 .claude/skills/investigation/scripts/doctor.py --json --offline
+          # R9: submit + prepare through the INSTALLED runtime with the test-only
+          # fake adapter (tests/, never shipped): no checkout paths, no Hive/Crux,
+          # nothing approved or launched.
+          python3 "$GITHUB_WORKSPACE/tests/_runtime_install_smoke.py" .claude/skills/investigation "$tmp"
+
+  no-hardcoded-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: "! grep -rn --exclude-dir=__pycache__ /Users/ skills/"

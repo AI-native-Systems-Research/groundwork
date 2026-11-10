@@ -1,0 +1,31 @@
+{
+  "cost": {
+    "amount_usd": 2.861085
+  },
+  "date": "2026-11-01T00:00:00+00:00",
+  "external_cost": {},
+  "models_used": [],
+  "notes": "",
+  "outputs": {
+    "candidates_path": "index.md",
+    "module_status": {
+      "SUCCEEDED": 1
+    },
+    "num_candidates": 4
+  },
+  "run_id": "run-toy0001",
+  "spotlights": {
+    "commit_sha": "",
+    "config": {},
+    "pipeline": "deep-research"
+  },
+  "target": {
+    "commit_sha": "SET_BY_TEST",
+    "objective": "reduce median TTFT",
+    "repo_url": "https://example.com/toyrepo.git"
+  },
+  "timing": {
+    "wall_clock_s": 3600.0
+  },
+  "total_tokens": 1000
+}

@@ -1,0 +1,306 @@
+{
+  "report": {
+    "schema_version": "1",
+    "project_tree": {
+      "repository": {
+        "name": "toyrepo",
+        "summary": "toy",
+        "source_root": "",
+        "external_dependencies": []
+      },
+      "modules": []
+    },
+    "context": {
+      "objective": "reduce median TTFT",
+      "workload_hints": [
+        "multi-turn"
+      ],
+      "validation_plan": []
+    },
+    "candidates": [
+      {
+        "id": "cand-toy_cache-0001",
+        "module_qualified_name": "toy/cache",
+        "origin": "code_agent",
+        "locations": [
+          {
+            "file": "toy/cache/constants.py",
+            "spans": [
+              {
+                "line_start": 3,
+                "line_end": 5,
+                "symbol": "cache constants (BLOCK_SIZE, MAX_BLOCKS)",
+                "kind": "config_block"
+              }
+            ]
+          }
+        ],
+        "description": "desc 1",
+        "current_approach": "approach 1",
+        "evolve_rationale": "rationale 1",
+        "estimated_impact": "high",
+        "estimated_impact_explanation": "Block size gates prefix reuse; could cut TTFT by 18%",
+        "proposals": [
+          {
+            "id": "prop-toy_cache-0001",
+            "source": "agent_knowledge",
+            "anomaly_ref_ids": null,
+            "finding_ref_id": null,
+            "author": "claude",
+            "title": "Make BLOCK_SIZE adaptive",
+            "description": "d",
+            "rationale": "r",
+            "mechanism": null,
+            "required_changes": null,
+            "expected_effect": "TTFT -18%",
+            "evaluation_metric": null
+          }
+        ]
+      },
+      {
+        "id": "cand-toy_cache-0002",
+        "module_qualified_name": "toy/cache",
+        "origin": "code_agent",
+        "locations": [
+          {
+            "file": "toy/cache/policy.py",
+            "spans": [
+              {
+                "line_start": 4,
+                "line_end": 9,
+                "symbol": "LRUPolicy.evict",
+                "kind": "method"
+              }
+            ]
+          }
+        ],
+        "description": "desc 2",
+        "current_approach": "approach 2",
+        "evolve_rationale": "rationale 2",
+        "estimated_impact": "medium",
+        "estimated_impact_explanation": "Eviction order matters for multi-turn",
+        "proposals": [
+          {
+            "id": "prop-toy_cache-0002",
+            "source": "agent_knowledge",
+            "anomaly_ref_ids": null,
+            "finding_ref_id": null,
+            "author": "claude",
+            "title": "Add S3-FIFO policy",
+            "description": "d",
+            "rationale": "r",
+            "mechanism": null,
+            "required_changes": null,
+            "expected_effect": "hit rate +0.12",
+            "evaluation_metric": null
+          }
+        ]
+      },
+      {
+        "id": "cand-toy_cache-0003",
+        "module_qualified_name": "toy/cache",
+        "origin": "code_agent",
+        "locations": [
+          {
+            "file": "toy/cache/policy.py",
+            "spans": [
+              {
+                "line_start": 11,
+                "line_end": 12,
+                "symbol": "LRUPolicy.touch",
+                "kind": "method"
+              }
+            ]
+          }
+        ],
+        "description": "desc 3",
+        "current_approach": "approach 3",
+        "evolve_rationale": "rationale 3",
+        "estimated_impact": "low",
+        "estimated_impact_explanation": "Minor",
+        "proposals": []
+      },
+      {
+        "id": "cand-toy_cache-0004",
+        "module_qualified_name": "toy/cache",
+        "origin": "code_agent",
+        "locations": [
+          {
+            "file": "toy/cache/missing.py",
+            "spans": [
+              {
+                "line_start": 1,
+                "line_end": 2,
+                "symbol": "gone",
+                "kind": "function"
+              }
+            ]
+          }
+        ],
+        "description": "desc 4",
+        "current_approach": "approach 4",
+        "evolve_rationale": "rationale 4",
+        "estimated_impact": "low",
+        "estimated_impact_explanation": "Missing file",
+        "proposals": []
+      }
+    ],
+    "findings": [],
+    "anomalies": [],
+    "run": {
+      "pipeline": "deep_research",
+      "run_id": "run-toy0001",
+      "started_at": "2026-11-01T00:00:00+00:00",
+      "finished_at": "2026-11-01T01:00:00+00:00",
+      "cost_usd": 2.861085
+    },
+    "issues": []
+  },
+  "module_runs": {
+    "toy/cache": {
+      "module_qualified_name": "toy/cache",
+      "status": "SUCCEEDED",
+      "candidates": {
+        "module_qualified_name": "toy/cache",
+        "candidates": [
+          {
+            "id": "cand-toy_cache-0001",
+            "module_qualified_name": "toy/cache",
+            "origin": "code_agent",
+            "locations": [
+              {
+                "file": "toy/cache/constants.py",
+                "spans": [
+                  {
+                    "line_start": 3,
+                    "line_end": 5,
+                    "symbol": "cache constants (BLOCK_SIZE, MAX_BLOCKS)",
+                    "kind": "config_block"
+                  }
+                ]
+              }
+            ],
+            "description": "desc 1",
+            "current_approach": "approach 1",
+            "evolve_rationale": "rationale 1",
+            "estimated_impact": "high",
+            "estimated_impact_explanation": "Block size gates prefix reuse; could cut TTFT by 18%",
+            "proposals": [
+              {
+                "id": "prop-toy_cache-0001",
+                "source": "agent_knowledge",
+                "anomaly_ref_ids": null,
+                "finding_ref_id": null,
+                "author": "claude",
+                "title": "Make BLOCK_SIZE adaptive",
+                "description": "d",
+                "rationale": "r",
+                "mechanism": null,
+                "required_changes": null,
+                "expected_effect": "TTFT -18%",
+                "evaluation_metric": null
+              }
+            ]
+          },
+          {
+            "id": "cand-toy_cache-0002",
+            "module_qualified_name": "toy/cache",
+            "origin": "code_agent",
+            "locations": [
+              {
+                "file": "toy/cache/policy.py",
+                "spans": [
+                  {
+                    "line_start": 4,
+                    "line_end": 9,
+                    "symbol": "LRUPolicy.evict",
+                    "kind": "method"
+                  }
+                ]
+              }
+            ],
+            "description": "desc 2",
+            "current_approach": "approach 2",
+            "evolve_rationale": "rationale 2",
+            "estimated_impact": "medium",
+            "estimated_impact_explanation": "Eviction order matters for multi-turn",
+            "proposals": [
+              {
+                "id": "prop-toy_cache-0002",
+                "source": "agent_knowledge",
+                "anomaly_ref_ids": null,
+                "finding_ref_id": null,
+                "author": "claude",
+                "title": "Add S3-FIFO policy",
+                "description": "d",
+                "rationale": "r",
+                "mechanism": null,
+                "required_changes": null,
+                "expected_effect": "hit rate +0.12",
+                "evaluation_metric": null
+              }
+            ]
+          },
+          {
+            "id": "cand-toy_cache-0003",
+            "module_qualified_name": "toy/cache",
+            "origin": "code_agent",
+            "locations": [
+              {
+                "file": "toy/cache/policy.py",
+                "spans": [
+                  {
+                    "line_start": 11,
+                    "line_end": 12,
+                    "symbol": "LRUPolicy.touch",
+                    "kind": "method"
+                  }
+                ]
+              }
+            ],
+            "description": "desc 3",
+            "current_approach": "approach 3",
+            "evolve_rationale": "rationale 3",
+            "estimated_impact": "low",
+            "estimated_impact_explanation": "Minor",
+            "proposals": []
+          },
+          {
+            "id": "cand-toy_cache-0004",
+            "module_qualified_name": "toy/cache",
+            "origin": "code_agent",
+            "locations": [
+              {
+                "file": "toy/cache/missing.py",
+                "spans": [
+                  {
+                    "line_start": 1,
+                    "line_end": 2,
+                    "symbol": "gone",
+                    "kind": "function"
+                  }
+                ]
+              }
+            ],
+            "description": "desc 4",
+            "current_approach": "approach 4",
+            "evolve_rationale": "rationale 4",
+            "estimated_impact": "low",
+            "estimated_impact_explanation": "Missing file",
+            "proposals": []
+          }
+        ]
+      },
+      "findings": [],
+      "issues": []
+    }
+  },
+  "per_module_telemetry": {},
+  "manager_issues": [],
+  "renderer_result": {
+    "index_path": "index.md"
+  },
+  "extractor_invocation": {
+    "cost_usd": 15.84
+  }
+}

@@ -1,0 +1,9 @@
+research_question: >
+  Does raising --cache-size from 64 to 256 lower the p99 latency of
+  toy_cache.py?
+run_id: toy-cache-invalid
+max_iterations: 3
+task_type: optimize
+objective:
+  metric: p99_ms
+  direction: decrease

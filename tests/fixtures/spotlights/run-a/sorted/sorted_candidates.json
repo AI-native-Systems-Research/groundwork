@@ -1,0 +1,98 @@
+{
+  "source_md": "sorted/sorted_candidates.md",
+  "source_result": "result.json",
+  "run_id": "run-toy0001",
+  "objective": "reduce median TTFT",
+  "method": "listwise sub-agent judge",
+  "total_ranked": 4,
+  "candidates": [
+    {
+      "rank": 1,
+      "id": "cand-toy_cache-0002",
+      "module_qualified_name": "toy/cache",
+      "symbol": "LRUPolicy.evict",
+      "impact": "medium",
+      "score": 91,
+      "rationale": "Eviction dominates the multi-turn hit rate",
+      "locations": [
+        {
+          "file": "toy/cache/policy.py",
+          "spans": [
+            {
+              "line_start": 4,
+              "line_end": 9,
+              "symbol": "LRUPolicy.evict",
+              "kind": "method"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "id": "cand-toy_cache-0001",
+      "module_qualified_name": "toy/cache",
+      "symbol": "cache constants (BLOCK_SIZE, MAX_BLOCKS)",
+      "impact": "high",
+      "score": 77,
+      "rationale": "Block size is coarse",
+      "locations": [
+        {
+          "file": "toy/cache/constants.py",
+          "spans": [
+            {
+              "line_start": 3,
+              "line_end": 5,
+              "symbol": "cache constants (BLOCK_SIZE, MAX_BLOCKS)",
+              "kind": "config_block"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "id": "cand-toy_cache-0003",
+      "module_qualified_name": "toy/cache",
+      "symbol": "LRUPolicy.touch",
+      "impact": "low",
+      "score": 40,
+      "rationale": "small",
+      "locations": [
+        {
+          "file": "toy/cache/policy.py",
+          "spans": [
+            {
+              "line_start": 11,
+              "line_end": 12,
+              "symbol": "LRUPolicy.touch",
+              "kind": "method"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "id": "cand-toy_cache-0004",
+      "module_qualified_name": "toy/cache",
+      "symbol": "gone",
+      "impact": "low",
+      "score": null,
+      "rationale": "not ranked by judge; pre-score order",
+      "locations": [
+        {
+          "file": "toy/cache/missing.py",
+          "spans": [
+            {
+              "line_start": 1,
+              "line_end": 2,
+              "symbol": "gone",
+              "kind": "function"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

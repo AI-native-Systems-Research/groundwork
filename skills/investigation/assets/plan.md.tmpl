@@ -1,0 +1,74 @@
+# {{slug}} — method plan
+
+Status: **draft — awaiting owner approval.** This is a provisional method outline. Nothing
+that costs money or touches an external system runs until the owner approves it, and approving
+it grants no launch: each launch still gets its own go (for nous-blis and spotlights-static,
+its own runtime approval card).
+
+Preflight: `doctor.py` at {{date}}. Available methods: {{available_methods}}.
+Unavailable: {{unavailable_methods}}.
+
+## Methods chosen
+
+<!-- Any of: code-reading, telemetry-snapshot, spotlights-static, spotlights-telemetry,
+     nous-blis, sim2real-prep. Only methods doctor.py reports as available. -->
+
+## Why each, why not the others
+
+| Method | Chosen? | One line why / why not |
+|---|---|---|
+| code-reading | | |
+| telemetry-snapshot | | |
+| spotlights-static | | |
+| spotlights-telemetry | | |
+| nous-blis | | |
+| sim2real-prep | | |
+
+## Likely order (provisional)
+
+<!-- e.g. telemetry -> spotlights-static on the module the metrics point at -> nous-blis tests a fix.
+     Only the first step is planned here; each later step is decided in the step log after a
+     result. Each hand-off is a file in the study (capture id, candidate id). -->
+
+## Launch gates
+
+<!-- Runtime-governed (scripts/runtime.py, one approval card per launch): nous-blis,
+     spotlights-static. Legacy gate, not runtime-enforced (a go in chat per launch):
+     telemetry-snapshot, spotlights-telemetry. -->
+
+## Telemetry window (if telemetry-snapshot)
+
+<!-- Cluster name from investigations/config.yaml, absolute RFC 3339 start/end, step,
+     and why this window fits the question. -->
+
+## Cost and time
+
+<!-- Estimates. Money and time are advisory: no engine stops at a cost or a time budget
+     (Spotlights --max-cost is reported, not a cap). Nous max_iterations is engine-enforced. -->
+
+| Method | Rough $ (advisory) | Wall-clock (advisory) | Disk (runs dir) |
+|---|---|---|---|
+| | | | |
+
+## Claim kinds
+
+<!-- Measured only, or measured + code citations (qualitative questions only). -->
+
+## Pushback (if any)
+
+<!-- Unfalsifiable as posed (propose a re-posing), data we can't get, already answered
+     (point at the study), or a pure lookup (code-reading alone). A study may end here. -->
+
+## Step log
+
+<!-- One entry per result, newest last. The next request's next_step block is copied from
+     the latest entry. A result never starts the next step by itself; stopping needs no launch.
+
+### <date> — <method>, <invocation id or capture id>
+
+- Interpretation: <what the result shows; its outcome classification>
+- Remaining uncertainty: <what is still open>
+- Next step or stopping reason: <stop / ask the owner / one proposed next step>
+- Expected information gain: <what the next step could change in the answer>
+- Limits: <max_iterations (engine), cost and time (advisory)>
+-->

@@ -1,0 +1,61 @@
+{
+  "schema": "ains.experiment-request/v1",
+  "message_id": "req-0001",
+  "work_id": "w-kv-offload-01",
+  "revision": 1,
+  "target": {
+    "repo_name": "llm-d-inference-scheduler",
+    "commit": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "artifacts": [
+    {
+      "kind": "question-md",
+      "location": "investigations/kv-offload/question.md",
+      "digest": "sha256:abababababababababababababababababababababababababababababababab",
+      "provisional": false
+    }
+  ],
+  "body": {
+    "capability": "nous",
+    "question": "Does offloading KV blocks to a CPU tier at the shipped 0.9 GPU-utilization threshold lower p99 TTFT on the shared-prefix workload?",
+    "task_type": "verify",
+    "objective": "minimize p99 TTFT",
+    "baseline": "--kv-cpu-blocks 0 (offload off, B-off)",
+    "hypothesis": "a CPU tier of 1/3 the GPU blocks at --kv-offload-threshold 0.9 lowers p99 TTFT by more than 2x the noise SD",
+    "locks": {
+      "blis_binary": "bin/blis",
+      "blis_binary_sha256": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "catalog_commit": "0123456789abcdef0123456789abcdef01234567"
+    },
+    "limits": {
+      "max_iterations": 3,
+      "budget_usd_advisory": 20
+    },
+    "semantics": {
+      "target_system": {
+        "name": "llm-d inference scheduler in BLIS",
+        "description": "llm-d inference scheduler simulated in BLIS. Arms: --kv-cpu-blocks 0 vs 1/3 of the GPU blocks, --kv-offload-threshold 0.9. Metric: p99 TTFT over the measurement window, warm-up excluded. Never modify the BLIS binary or catalog."
+      },
+      "models": {
+        "session": "claude-sonnet-4-5"
+      },
+      "objective": {
+        "metric": "p99_ttft_ms",
+        "direction": "decrease"
+      },
+      "blis": {
+        "knobs": [
+          "--kv-cpu-blocks",
+          "--kv-offload-threshold"
+        ],
+        "limitations": [
+          "the workload's working set fits in cache"
+        ]
+      },
+      "experiment_commands": [
+        "blis run .*"
+      ],
+      "run_id": "kv-offload-cpu-tier"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "schema": "ains.clarification/v1",
+  "message_id": "clar-0002",
+  "work_id": "w-prefix-cache-01",
+  "revision": 1,
+  "target": {
+    "repo_name": "llm-d-inference-scheduler",
+    "commit": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "artifacts": [],
+  "body": {
+    "kind": "answer",
+    "text": "Use the shared-prefix trace from the 2026-10 capture."
+  },
+  "reply_to": "clar-0001"
+}

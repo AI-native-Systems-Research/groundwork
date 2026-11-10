@@ -1,0 +1,52 @@
+{
+  "report": {
+    "schema_version": "1",
+    "project_tree": {
+      "repository": {
+        "name": "toyrepo",
+        "summary": "toy",
+        "source_root": "",
+        "external_dependencies": []
+      },
+      "modules": []
+    },
+    "context": {
+      "objective": "reduce median TTFT",
+      "workload_hints": [
+        "multi-turn"
+      ],
+      "validation_plan": []
+    },
+    "candidates": [],
+    "findings": [],
+    "anomalies": [],
+    "run": {
+      "pipeline": "deep_research",
+      "run_id": "run-toy0001",
+      "started_at": "2026-11-01T00:00:00+00:00",
+      "finished_at": "2026-11-01T01:00:00+00:00",
+      "cost_usd": 2.861085
+    },
+    "issues": []
+  },
+  "module_runs": {
+    "toy/cache": {
+      "module_qualified_name": "toy/cache",
+      "status": "SUCCEEDED",
+      "candidates": {
+        "module_qualified_name": "toy/cache",
+        "candidates": []
+      },
+      "findings": [],
+      "issues": []
+    }
+  },
+  "per_module_telemetry": {},
+  "manager_issues": [],
+  "renderer_result": {
+    "index_path": "index.md"
+  },
+  "extractor_invocation": {
+    "cost_usd": 15.84
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "answer": "Partly.",
+  "deliverable": "none",
+  "repro": "blis run --block-size-in-tokens 32",
+  "claims": [
+    {
+      "id": "C1",
+      "metric": "capacity",
+      "value": 1.2,
+      "condition": "bs=32",
+      "evidence": "runs/iter-1/results/R1.json"
+    }
+  ]
+}

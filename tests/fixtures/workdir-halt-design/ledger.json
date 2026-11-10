@@ -1,0 +1,17 @@
+[
+  {
+    "iteration": 1,
+    "bundle_hash": "",
+    "claims_changed": true,
+    "best_changed": false,
+    "principles_changed": false,
+    "prereg_violation": false,
+    "status": "ok",
+    "stop_reason": null,
+    "cost_meter_usd": 0.5,
+    "tokens": {
+      "input": 10,
+      "output": 20
+    }
+  }
+]

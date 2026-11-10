@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://groundwork.local/runtime-schemas/clarification.v1.json",
+  "title": "AINS clarification v1",
+  "description": "Documentation only. The authoritative validator is scripts/ains_runtime/contracts.py (stdlib, no jsonschema dependency); where this document and the code disagree, the code wins and this file is a bug. A question moves the work to waiting_for_answer; an answer (reply_to = the question's message_id) moves it back to accepted.",
+  "allOf": [
+    {
+      "$ref": "envelope.v1.json"
+    },
+    {
+      "properties": {
+        "schema": {
+          "const": "ains.clarification/v1"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "text"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "question",
+                "answer"
+              ]
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            },
+            "fields": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "x-examples": [
+    "examples/clarification-question.json",
+    "examples/clarification-answer.json"
+  ]
+}

@@ -1,0 +1,35 @@
+# Per-repo investigation config for {{repo_name}}.
+# tracking: fork      -> this file is investigations/config.yaml, committed on your fork only.
+# tracking: untracked -> this file lives in the machine config home (repos/<repo>.yaml) and
+#                        investigations/ is listed in .git/info/exclude.
+# Machine-specific paths (engine checkouts, BLIS apparatus root, runs dir) never go here;
+# they belong in the machine config (config.yaml in the config home).
+
+tracking: {{tracking}}
+
+# The remote that is the upstream (org) repo. The commit guard refuses to commit
+# investigations/ when the branch's push remote is this one.
+upstream_remote: {{upstream_remote}}
+
+# Named clusters for telemetry-snapshot. Never put a token here, only the NAME of the env var.
+clusters: {}
+#  prod-a:
+#    kind: port-forward
+#    context: my-kube-context
+#    namespace: monitoring
+#    service: prometheus-k8s
+#    port: 9090
+#  shared-thanos:
+#    kind: url
+#    url: https://thanos.example.com
+#    token_env: THANOS_TOKEN
+
+# Extra PromQL for this repo, merged with the skill's assets/promql/starter.yaml.
+promql_extra: {}
+#  my_query: sum(rate(my_metric_total[5m]))
+
+# false when BLIS can't represent this repo's levers at all (doctor then reports nous-blis unavailable).
+blis_applicable: true
+
+# Default target metric names for this repo's questions.
+target_metrics: []

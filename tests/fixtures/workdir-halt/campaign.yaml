@@ -1,0 +1,12 @@
+# Synthetic fixture for the runtime Nous adapter (R4). All numbers are made up.
+research_question: Does block size 32 beat 16 on capacity?
+run_id: fixture-halt-0001
+max_iterations: 5
+task_type: verify
+target_system:
+  name: fixture
+  description: synthetic
+  repo_path: /path/to/repo
+objective:
+  metric: capacity
+  direction: increase

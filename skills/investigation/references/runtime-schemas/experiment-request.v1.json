@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://groundwork.local/runtime-schemas/experiment-request.v1.json",
+  "title": "AINS experiment request v1",
+  "description": "Documentation only. The authoritative validator is scripts/ains_runtime/contracts.py (stdlib, no jsonschema dependency); where this document and the code disagree, the code wins and this file is a bug. Submitted by the coordinator. Accepting it records the request; it grants no launch.",
+  "allOf": [
+    {
+      "$ref": "envelope.v1.json"
+    },
+    {
+      "properties": {
+        "schema": {
+          "const": "ains.experiment-request/v1"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "capability",
+            "question",
+            "task_type",
+            "objective",
+            "locks",
+            "limits",
+            "semantics"
+          ],
+          "properties": {
+            "capability": {
+              "enum": [
+                "nous",
+                "spotlights-static",
+                "spotlights-telemetry",
+                "telemetry-capture"
+              ]
+            },
+            "question": {
+              "type": "string",
+              "minLength": 1
+            },
+            "task_type": {
+              "enum": [
+                "debug",
+                "verify",
+                "optimize",
+                "policy",
+                "explain",
+                "other"
+              ]
+            },
+            "objective": {
+              "type": "string",
+              "minLength": 1
+            },
+            "baseline": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "hypothesis": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Required for a supported/not_supported classification of the result."
+            },
+            "locks": {
+              "type": "object"
+            },
+            "limits": {
+              "type": "object",
+              "description": "For capability nous, max_iterations (integer >= 1) is required (runtime-enforced presence, engine-enforced bound). No invocation-count caps (D8). Monetary and time limits are advisory."
+            },
+            "next_step": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "interpretation_of_prior",
+                    "remaining_uncertainty",
+                    "expected_information_gain",
+                    "rationale"
+                  ],
+                  "properties": {
+                    "interpretation_of_prior": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "remaining_uncertainty": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "expected_information_gain": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "rationale": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "description": "Required whenever the study already has a result (checked at prepare, R2)."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "repeat_of": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "repeat_reason": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "type": "object",
+              "description": "Capability-specific semantic inputs (adapters validate them). The native engine config (e.g. Nous campaign.yaml) is NOT the public contract."
+            }
+          },
+          "dependentRequired": {
+            "repeat_of": [
+              "repeat_reason"
+            ],
+            "repeat_reason": [
+              "repeat_of"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "x-examples": [
+    "examples/experiment-request.json",
+    "examples/experiment-request-next-step.json"
+  ]
+}

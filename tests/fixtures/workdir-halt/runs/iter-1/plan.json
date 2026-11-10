@@ -1,0 +1,10 @@
+{
+  "runs": [
+    {
+      "id": "R1",
+      "hypothesis_id": "H1",
+      "role": "treatment",
+      "command": "blis run --block-size-in-tokens 32"
+    }
+  ]
+}

@@ -1,0 +1,139 @@
+"""Secret-value planting: a secret-looking env value never lands in stored
+records, receipts or exports (spec §6; plan §4.1)."""
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _runtime_util import RUNTIME, envelope, request  # noqa: E402
+from ains_runtime import envpolicy  # noqa: E402
+from ains_runtime import store as S  # noqa: E402
+from ains_runtime.contracts import validate_message  # noqa: E402
+from ains_runtime.export import export_study  # noqa: E402
+
+SECRET = "sk-planted-7f3e9a1c55d04b2e"
+ENV = {"FAKE_API_TOKEN": SECRET, "HOME": "/home/x", "SHORT_KEY": "abc"}
+
+
+def all_bytes(root: Path) -> bytes:
+    out = b""
+    for p in sorted(root.rglob("*")):
+        if p.is_file():
+            out += p.read_bytes()
+    return out
+
+
+class EnvPolicy(unittest.TestCase):
+    def test_secret_names(self):
+        for n in ("ANTHROPIC_API_KEY", "GH_TOKEN", "DB_PASSWORD", "X_AUTH", "my_secret"):
+            self.assertTrue(envpolicy.is_secret_name(n), n)
+        for n in ("HOME", "PATH", "CLAUDE_CODE_ENTRYPOINT", "NOUS_CAMPAIGN_PARENT"):
+            self.assertFalse(envpolicy.is_secret_name(n), n)
+
+    def test_short_values_ignored(self):
+        self.assertEqual(envpolicy.secret_values(ENV), {"FAKE_API_TOKEN": SECRET})
+
+    def test_findings_never_contain_the_value(self):
+        found = envpolicy.find_secret_values({"a": [f"x{SECRET}y"], SECRET: 1}, ENV)
+        self.assertEqual(len(found), 2)
+        for f in found:
+            self.assertNotIn(SECRET, f)
+            self.assertIn("$FAKE_API_TOKEN", f)
+
+    def test_redact(self):
+        self.assertEqual(envpolicy.redact(f"tok={SECRET}", ENV),
+                         "tok=[REDACTED:$FAKE_API_TOKEN]")
+
+
+class Planting(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.db = self.tmp / "runs" / S.DB_NAME
+        self.store = S.open_store(self.db)
+
+    def tearDown(self):
+        self.store.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def assert_nowhere(self):
+        self.store.close()
+        blob = all_bytes(self.tmp)
+        self.assertNotIn(SECRET.encode(), blob)
+        self.store = S.open_store(self.db)
+
+    def test_planted_secret_in_message_is_refused_everywhere(self):
+        placements = [
+            lambda m: m["body"].update(question=f"Why does {SECRET} fail?"),
+            lambda m: m["body"]["semantics"].update(token=SECRET),
+            lambda m: m["body"]["locks"].update({SECRET: "x"}),
+            lambda m: m.update(artifacts=[{"kind": "log", "location": f"/tmp/{SECRET}",
+                                           "provisional": True}]),
+        ]
+        for i, place in enumerate(placements):
+            with self.subTest(i):
+                m = request(f"req-{i}", work_id=f"w-{i}")
+                place(m)
+                errs = validate_message(m, ENV)
+                self.assertTrue(any("FAKE_API_TOKEN" in e for e in errs), errs)
+                res = self.store.submit(m, env=ENV)
+                self.assertEqual(res.status, "rejected")
+                self.assertIsNone(res.receipt)  # the receipt would echo nothing
+                self.assertNotIn(SECRET, json.dumps(res.output()))
+        self.assertEqual(self.store.list_messages(), [])
+        self.assert_nowhere()
+
+    def test_planted_secret_in_records_is_refused(self):
+        self.assertTrue(self.store.submit(request(), env=ENV).ok)
+        rec = {"capability": "nous", "material": {"q": "x"},
+               "env": {"FAKE_API_TOKEN": SECRET}}
+        with self.assertRaises(S.StoreError) as cm:
+            self.store.insert_preparation("p-1", "w-1", rec, env=ENV)
+        self.assertNotIn(SECRET, str(cm.exception))
+        ok = {"capability": "nous", "material": {"q": "x"},
+              "env": {"FAKE_API_TOKEN": "present"}}
+        d = self.store.insert_preparation("p-1", "w-1", ok, env=ENV)
+        with self.assertRaises(S.StoreError):
+            self.store.insert_approval("a-1", "p-1", d, "chat", f"go {SECRET}", env=ENV)
+        self.assert_nowhere()
+
+    def test_export_has_no_secret(self):
+        self.assertTrue(self.store.submit(request(), env=ENV).ok)
+        self.assertTrue(self.store.submit(envelope("cancel", "c-1", {"reason": "stop"}),
+                                          env=ENV).ok)
+        study = self.tmp / "study"
+        export_study(self.store, study, env=ENV)
+        self.assertTrue((study / "runtime" / "requests" / "req-1.json").is_file())
+        self.assert_nowhere()
+
+    def test_export_refuses_when_env_changed_to_match_stored_text(self):
+        # A value stored when it wasn't secret becomes one later: export
+        # refuses rather than publish it.
+        self.assertTrue(self.store.submit(request(objective="minimize p99 TTFT-xyz123"),
+                                          env={}).ok)
+        with self.assertRaises(S.StoreError) as cm:
+            export_study(self.store, self.tmp / "study",
+                         env={"LATE_SECRET": "p99 TTFT-xyz123"})
+        self.assertNotIn("TTFT-xyz123", str(cm.exception))
+        self.assertFalse((self.tmp / "study" / "runtime" / "requests").exists())
+
+    def test_cli_submit_with_planted_env(self):
+        m = request(question=f"leak {SECRET}?")
+        f = self.tmp / "m.json"
+        f.write_text(json.dumps(m))
+        env = {**os.environ, "FAKE_API_TOKEN": SECRET}
+        r = subprocess.run([sys.executable, str(RUNTIME), "--db", str(self.db),
+                            "submit", str(f)], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn(SECRET, r.stdout + r.stderr)
+        self.assertIn("FAKE_API_TOKEN", r.stdout)
+        f.unlink()
+        self.assert_nowhere()
+
+
+if __name__ == "__main__":
+    unittest.main()

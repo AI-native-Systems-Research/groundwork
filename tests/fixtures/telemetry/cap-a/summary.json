@@ -1,0 +1,97 @@
+{
+  "summary_version": 1,
+  "capture_id": "cap-a",
+  "window": {
+    "start": "2025-11-05T00:00:00Z",
+    "end": "2025-11-05T00:01:30Z",
+    "step": "30s"
+  },
+  "queries": {
+    "kv_cache_usage": {
+      "query": "avg by (pod) (vllm:kv_cache_usage_perc)",
+      "overall": {
+        "mean": 0.4,
+        "p50": 0.375,
+        "max": 0.75,
+        "min": 0.125,
+        "n_points": 5,
+        "n_series": 2
+      },
+      "series": [
+        {
+          "mean": 0.5,
+          "p50": 0.5,
+          "max": 0.75,
+          "min": 0.25,
+          "n_points": 3,
+          "n_series": 1,
+          "labels": {
+            "pod": "vllm-0",
+            "namespace": "llm-d"
+          }
+        },
+        {
+          "mean": 0.25,
+          "p50": 0.25,
+          "max": 0.375,
+          "min": 0.125,
+          "n_points": 2,
+          "n_series": 1,
+          "labels": {
+            "pod": "vllm-1",
+            "namespace": "llm-d"
+          }
+        }
+      ]
+    },
+    "num_requests_waiting": {
+      "query": "sum by (pod) (vllm:num_requests_waiting)",
+      "overall": {
+        "mean": 4.0,
+        "p50": 3.5,
+        "max": 7.0,
+        "min": 2.0,
+        "n_points": 4,
+        "n_series": 1
+      },
+      "series": [
+        {
+          "mean": 4.0,
+          "p50": 3.5,
+          "max": 7.0,
+          "min": 2.0,
+          "n_points": 4,
+          "n_series": 1,
+          "labels": {
+            "pod": "vllm-0"
+          }
+        }
+      ]
+    },
+    "prefix_hit_rate": {
+      "query": "sum(rate(vllm:prefix_cache_hits_total[5m])) / sum(rate(vllm:prefix_cache_queries_total[5m]))",
+      "overall": {
+        "mean": null,
+        "p50": null,
+        "max": null,
+        "min": null,
+        "n_points": 0,
+        "n_series": 0
+      },
+      "series": []
+    },
+    "vllm_running": {
+      "query": "sum(vllm:num_requests_running)",
+      "overall": {
+        "mean": null,
+        "p50": null,
+        "max": null,
+        "min": null,
+        "n_points": 0,
+        "n_series": 0
+      },
+      "series": [],
+      "error": "HTTP 422: bad_data: parse error"
+    }
+  }
+}

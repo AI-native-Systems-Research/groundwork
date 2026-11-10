@@ -1,0 +1,42 @@
+{
+  "capture_version": 1,
+  "source": {
+    "kind": "url",
+    "host": "prometheus.example.internal:9090",
+    "auth": "bearer",
+    "token_env": "PROM_TOKEN"
+  },
+  "cluster": "test-cluster-a",
+  "window": {
+    "start": "2025-11-05T00:00:00Z",
+    "end": "2025-11-05T00:01:30Z",
+    "step": "30s"
+  },
+  "queries": {
+    "kv_cache_usage": "avg by (pod) (vllm:kv_cache_usage_perc)",
+    "num_requests_waiting": "sum by (pod) (vllm:num_requests_waiting)",
+    "prefix_hit_rate": "sum(rate(vllm:prefix_cache_hits_total[5m])) / sum(rate(vllm:prefix_cache_queries_total[5m]))",
+    "vllm_running": "sum(vllm:num_requests_running)"
+  },
+  "query_sources": {
+    "kv_cache_usage": "starter",
+    "num_requests_waiting": "starter",
+    "prefix_hit_rate": "starter",
+    "vllm_running": "starter"
+  },
+  "empty_queries": [
+    "prefix_hit_rate"
+  ],
+  "failed_queries": {
+    "vllm_running": "HTTP 422: bad_data: parse error"
+  },
+  "captured_at": "2025-11-05T00:05:00Z",
+  "files": {
+    "metrics.jsonl": "60bb129341f8d26e12d2e7731d3744d75c296f1d4343fb0eb3e44b1a1437936e",
+    "prom/kv_cache_usage.json": "0f825b87febabb170d25396f29a2593c181745b0941dd839e6fa9d1a9ba3b027",
+    "prom/num_requests_waiting.json": "e9ebd792e4f1614b6368b1c0795052a3d16010c1adc2f9fe7bc7106645343087",
+    "prom/prefix_hit_rate.json": "b9addba45aabf2e5be302b5608c037c06e45fd3b6f3667f8ffb40d9bd988f672",
+    "summary.json": "ead5a91f80007b5c37e0d561c24a7673a7e9b6340948b4cd55fe232342429ccd"
+  },
+  "moved": {}
+}

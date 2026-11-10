@@ -1,0 +1,6 @@
+{
+  "answer": "Yes - PD-decider wins on throughput at equal p99.",
+  "deliverable": "deliverable.md",
+  "repro": "python3 scripts/run_study.py --question q1 --seeds 3",
+  "claims": []
+}

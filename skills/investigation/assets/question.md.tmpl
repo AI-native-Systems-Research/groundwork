@@ -1,0 +1,46 @@
+# {{slug}} — the question
+
+## The question
+
+> {{question}}
+
+## Where it came from
+
+<!-- e.g. opportunities row N, a Slack thread, an incident. Link it. -->
+
+## Kind
+
+<!-- qualitative ("where / why / how does X work") or quantitative ("how much / does X beat Y").
+     This decides the allowed claim kinds: code citations are for qualitative questions only. -->
+Kind: TODO (qualitative | quantitative)
+
+## Falsifiable form (pre-registered)
+
+<!-- "This is wrong if ..." — fixed before anything runs. Name the metric, threshold and comparator. -->
+
+## Baseline
+
+<!-- Usually the shipped default ("B-ship"). Named before any run, never picked after. -->
+
+## Prior learnings checked
+
+<!-- Earlier investigations/ in this repo and Nous principles.json files you grepped, and what they said. -->
+
+## Pins (recorded at intake, {{date}})
+
+| Pin | Value |
+|---|---|
+| Target repo | `{{repo_name}}` |
+| Remote URL | `{{remote_url}}` |
+| Branch | `{{branch}}` |
+| HEAD | `{{head}}` |
+| Tracking mode | `{{tracking}}` |
+| Runs dir | `{{runs_dir}}` |
+{{engine_rows}}
+
+<!-- Engine versions come from doctor.py at intake. If a method later runs with a different
+     version, add a row; never edit the ones above. -->
+
+## Known limits
+
+<!-- Limits that must appear in the eventual answer, stated plainly. -->

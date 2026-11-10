@@ -1,0 +1,3 @@
+# Test query set: the fake server answers by matching the PromQL text.
+running: sum by (pod) (vllm:num_requests_running)
+nothing: sum (rate(vllm:does_not_exist_total[5m]))

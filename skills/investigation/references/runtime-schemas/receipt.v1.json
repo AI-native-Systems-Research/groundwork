@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://groundwork.local/runtime-schemas/receipt.v1.json",
+  "title": "AINS receipt v1",
+  "description": "Documentation only. The authoritative validator is scripts/ains_runtime/contracts.py (stdlib, no jsonschema dependency); where this document and the code disagree, the code wins and this file is a bug. Written by the runtime only (submitting one is rejected). A receipt means recorded acceptance, not launch success or completion.",
+  "allOf": [
+    {
+      "$ref": "envelope.v1.json"
+    },
+    {
+      "properties": {
+        "schema": {
+          "const": "ains.receipt/v1"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "received_message_id",
+            "received_schema",
+            "payload_digest",
+            "status",
+            "work_state",
+            "reasons",
+            "received_at"
+          ],
+          "properties": {
+            "received_message_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            },
+            "received_schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "payload_digest": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "accepted",
+                "rejected",
+                "conflict"
+              ]
+            },
+            "work_state": {
+              "oneOf": [
+                {
+                  "enum": [
+                    "accepted",
+                    "running",
+                    "waiting_for_answer",
+                    "completed",
+                    "rejected",
+                    "failed",
+                    "cancelled",
+                    "cancel_requested",
+                    "recovery_required"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reasons": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Non-empty when status is rejected or conflict."
+            },
+            "received_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        }
+      },
+      "required": [
+        "reply_to"
+      ]
+    }
+  ],
+  "x-examples": [
+    "examples/receipt.json",
+    "examples/receipt-conflict.json"
+  ]
+}

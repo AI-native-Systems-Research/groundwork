@@ -1,0 +1,6 @@
+{
+  "answer": "The baseline command failed on every seed, so no measured comparison is possible.",
+  "deliverable": "none",
+  "repro": "python toy_cache.py --cache-size 256 --seeds 1,2,3 --json",
+  "claims": []
+}

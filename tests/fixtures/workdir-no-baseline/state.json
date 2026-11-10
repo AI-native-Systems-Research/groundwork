@@ -1,0 +1,7 @@
+{
+  "phase": "REPORT",
+  "iteration": 0,
+  "session_id": "ses-nobaseline",
+  "baseline_status": "partial",
+  "stop_reason": "no_baseline"
+}

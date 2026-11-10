@@ -1,0 +1,57 @@
+{
+  "schema": "ains.experiment-result/v1",
+  "message_id": "res-0002",
+  "work_id": "w-prefix-cache-01",
+  "revision": 1,
+  "target": {
+    "repo_name": "llm-d-inference-scheduler",
+    "commit": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "artifacts": [],
+  "body": {
+    "invocation_id": "inv-0002",
+    "execution": {
+      "state": "failed",
+      "native_stop_reason": "no_baseline",
+      "exit_code": 0,
+      "started_at": "2026-11-09T20:00:00Z",
+      "ended_at": "2026-11-09T20:03:00Z",
+      "diagnostics": []
+    },
+    "collection": {
+      "state": "collected",
+      "reason": null
+    },
+    "outcome": {
+      "classification": "unavailable",
+      "hypothesis_ref": null,
+      "explanation": "execution failed (no_baseline): no baseline measurement exists",
+      "partial": false,
+      "classified_by": "runtime"
+    },
+    "validation": {
+      "state": "not_run",
+      "validator": "validate_answer.py",
+      "reason": "no answer.json to validate (none given with --answer, none in the study's final/, none written by the engine)"
+    },
+    "methods": {},
+    "limitations": [
+      {
+        "source": "runtime:classify",
+        "text": "state.json stop_reason no_baseline"
+      }
+    ],
+    "limits": [],
+    "spend": {
+      "reported_usd": null,
+      "completeness": "unknown",
+      "source": null
+    },
+    "versions": {
+      "runtime": "0.1.0",
+      "adapter": "nous/0.1.0",
+      "engine_sha": "e224cc1"
+    }
+  },
+  "reply_to": "req-0002"
+}

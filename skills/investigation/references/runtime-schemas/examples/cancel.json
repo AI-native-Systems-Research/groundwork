@@ -1,0 +1,16 @@
+{
+  "schema": "ains.cancel/v1",
+  "message_id": "cancel-0001",
+  "work_id": "w-prefix-cache-01",
+  "revision": 1,
+  "target": {
+    "repo_name": "llm-d-inference-scheduler",
+    "commit": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "artifacts": [],
+  "body": {
+    "reason": "owner asked to stop: wrong workload",
+    "invocation_id": "inv-0001",
+    "interrupt": false
+  }
+}

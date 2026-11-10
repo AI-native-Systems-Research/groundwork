@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://groundwork.local/runtime-schemas/cancel.v1.json",
+  "title": "AINS cancel v1",
+  "description": "Documentation only. The authoritative validator is scripts/ains_runtime/contracts.py (stdlib, no jsonschema dependency); where this document and the code disagree, the code wins and this file is a bug. Records a cancel request. Its receipt is not proof that anything stopped; the state is cancel_requested until a terminal state is confirmed.",
+  "allOf": [
+    {
+      "$ref": "envelope.v1.json"
+    },
+    {
+      "properties": {
+        "schema": {
+          "const": "ains.cancel/v1"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reason"
+          ],
+          "properties": {
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "invocation_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            },
+            "interrupt": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "x-examples": [
+    "examples/cancel.json"
+  ]
+}

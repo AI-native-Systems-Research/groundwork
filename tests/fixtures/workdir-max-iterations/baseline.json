@@ -1,0 +1,22 @@
+{
+  "task_type": "verify",
+  "command": "blis run --block-size-in-tokens 16",
+  "git_sha": "abc1234",
+  "observation": {
+    "points": []
+  },
+  "metrics_path": "b.json",
+  "noise": {
+    "seeds": [
+      1,
+      2,
+      3
+    ],
+    "values": [
+      1,
+      1.1,
+      0.9
+    ],
+    "sd": 0.1
+  }
+}

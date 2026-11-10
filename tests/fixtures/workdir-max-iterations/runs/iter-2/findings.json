@@ -1,0 +1,32 @@
+{
+  "hypotheses": [
+    {
+      "id": "H1",
+      "status": "INCONCLUSIVE",
+      "error_type": "none",
+      "noise_unmeasured": true,
+      "noise_reason": "one seed only",
+      "evidence": [
+        {
+          "path": "results/R1.json",
+          "key": "/capacity",
+          "value": 1.2
+        }
+      ]
+    },
+    {
+      "id": "H2",
+      "status": "REFUTED",
+      "error_type": "direction",
+      "evidence": [
+        {
+          "path": "results/R1.json",
+          "key": "/capacity",
+          "value": 1.2
+        }
+      ]
+    }
+  ],
+  "question_answered": false,
+  "reason": "effect below 2x noise"
+}

@@ -1,0 +1,34 @@
+{
+  "hypotheses": [
+    {
+      "id": "H1",
+      "role": "main",
+      "family": "f1",
+      "mechanism": "bigger blocks raise hits",
+      "prediction": {
+        "metric": "capacity",
+        "direction": "increase"
+      },
+      "control": "16",
+      "falsified_if": "capacity at 32 within 2 sd of 16",
+      "claim_ids": [
+        "C1"
+      ]
+    },
+    {
+      "id": "H2",
+      "role": "alternative",
+      "family": "f2",
+      "mechanism": "bigger blocks waste KV",
+      "prediction": {
+        "metric": "capacity",
+        "direction": "decrease"
+      },
+      "control": "16",
+      "falsified_if": "capacity at 32 not lower",
+      "claim_ids": [
+        "C1"
+      ]
+    }
+  ]
+}

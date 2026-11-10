@@ -1,0 +1,19 @@
+{
+  "study": "pd-decider-vs-threshold",
+  "config": {
+    "seeds": 3,
+    "p99_budget_ms": 3.2,
+    "apparatus": "blis-pd-decider-threshold"
+  },
+  "runs": [
+    {"seed": 1, "policy": "PD-decider", "metrics": {"throughput_rps": 4098.25, "p99_ms": 3.19, "iterations": 12}},
+    {"seed": 2, "policy": "PD-decider", "metrics": {"throughput_rps": 4101.0, "p99_ms": 3.21, "iterations": 11}},
+    {"seed": 3, "policy": "PD-decider", "metrics": {"throughput_rps": 4102.25, "p99_ms": 3.2, "iterations": 12}}
+  ],
+  "aggregate": {
+    "policy": "PD-decider",
+    "throughput_rps_mean": 4100.5,
+    "p99_ms_max": 3.21,
+    "iterations_mode": 12
+  }
+}

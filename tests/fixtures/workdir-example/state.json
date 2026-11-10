@@ -1,0 +1,7 @@
+{
+  "phase": "REPORT",
+  "iteration": 1,
+  "session_id": "ses-example",
+  "baseline_status": "ok",
+  "stop_reason": "answered"
+}

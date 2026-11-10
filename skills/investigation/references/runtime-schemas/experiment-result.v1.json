@@ -1,0 +1,505 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://groundwork.local/runtime-schemas/experiment-result.v1.json",
+  "title": "AINS experiment result v1",
+  "description": "Documentation only. The authoritative validator is scripts/ains_runtime/contracts.py (stdlib, no jsonschema dependency); where this document and the code disagree, the code wins and this file is a bug. Written by the runtime (scripts/ains_runtime/results.py, `runtime.py result`). Four separate axes: execution (lifecycle), collection (did read-only collection succeed), outcome (scientific classification, with who classified it) and validation (validate_answer.py exit code). A negative or inconclusive outcome is a completed execution. A collection or validation failure leaves execution unchanged and reruns nothing. Cross-field rules enforced by contracts.py: supported/not_supported/inconclusive/other need execution completed and collection collected; supported/not_supported/inconclusive need hypothesis_ref; findings need collection collected and either execution completed or failed/cancelled with findings.partial true (D3); validation passed means exit_code 0.",
+  "allOf": [
+    {
+      "$ref": "envelope.v1.json"
+    },
+    {
+      "properties": {
+        "schema": {
+          "const": "ains.experiment-result/v1"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "invocation_id",
+            "execution",
+            "collection",
+            "outcome",
+            "validation",
+            "methods",
+            "limitations",
+            "limits",
+            "spend",
+            "versions"
+          ],
+          "properties": {
+            "invocation_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            },
+            "execution": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state",
+                "native_stop_reason",
+                "exit_code",
+                "started_at",
+                "ended_at",
+                "diagnostics"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "accepted",
+                    "running",
+                    "waiting_for_answer",
+                    "completed",
+                    "rejected",
+                    "failed",
+                    "cancelled",
+                    "cancel_requested",
+                    "recovery_required"
+                  ]
+                },
+                "native_stop_reason": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "exit_code": {
+                  "oneOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "const": "unknown"
+                    }
+                  ]
+                },
+                "started_at": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ended_at": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "diagnostics": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "envelope.v1.json#/$defs/artifact_ref"
+                  }
+                }
+              }
+            },
+            "collection": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state",
+                "reason"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "not_run",
+                    "collected",
+                    "unavailable",
+                    "failed"
+                  ]
+                },
+                "reason": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "description": "Read-only collection of the native output. reason is required unless collected. A failed collection keeps the execution record and native output; nothing is rerun."
+            },
+            "outcome": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "classification",
+                "hypothesis_ref",
+                "explanation",
+                "partial",
+                "classified_by"
+              ],
+              "properties": {
+                "classification": {
+                  "enum": [
+                    "supported",
+                    "not_supported",
+                    "inconclusive",
+                    "other",
+                    "unavailable"
+                  ]
+                },
+                "hypothesis_ref": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "explanation": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Required for other and unavailable."
+                },
+                "partial": {
+                  "type": "boolean"
+                },
+                "classified_by": {
+                  "enum": [
+                    "runtime",
+                    "coordinator"
+                  ],
+                  "description": "runtime: derived from native evidence (unavailable unless the adapter can justify a classification). coordinator: given with `runtime.py result --outcome --explanation` for a completed, collected execution."
+                }
+              }
+            },
+            "findings": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "claims_from",
+                    "partial",
+                    "claims"
+                  ],
+                  "properties": {
+                    "claims_from": {
+                      "const": "answer-contract/v1"
+                    },
+                    "partial": {
+                      "type": "boolean"
+                    },
+                    "claims": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "metric",
+                          "value",
+                          "condition",
+                          "evidence"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "metric": {},
+                          "value": {},
+                          "condition": {},
+                          "evidence": {}
+                        }
+                      },
+                      "description": "Drafted claims with only the answer contract's five keys. A Spotlights estimate is never a value here."
+                    },
+                    "hypotheses": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "classification",
+                          "partial"
+                        ],
+                        "properties": {
+                          "id": {},
+                          "classification": {
+                            "enum": [
+                              "supported",
+                              "not_supported",
+                              "inconclusive",
+                              "other",
+                              "unavailable",
+                              "unclassified"
+                            ]
+                          },
+                          "partial": {
+                            "type": "boolean"
+                          },
+                          "iteration": {},
+                          "native_status": {},
+                          "error_type": {},
+                          "statement_ref": {},
+                          "findings_ref": {},
+                          "partial_note": {}
+                        }
+                      },
+                      "description": "Nous per-iteration hypothesis classifications (findings.json status; D2: PARTIALLY_CONFIRMED is other + partial_note)."
+                    },
+                    "candidates": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "rank": {},
+                          "module": {},
+                          "file": {},
+                          "cited": {}
+                        }
+                      },
+                      "description": "Spotlights candidate ids and locations only; estimates are never carried."
+                    },
+                    "answer_ref": {
+                      "$ref": "envelope.v1.json#/$defs/artifact_ref"
+                    }
+                  },
+                  "description": "Only when collection is collected and execution is completed, or failed/cancelled with partial true (D3)."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "validation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state",
+                "validator"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "not_run",
+                    "passed",
+                    "failed"
+                  ]
+                },
+                "validator": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "report_ref": {
+                  "$ref": "envelope.v1.json#/$defs/artifact_ref"
+                },
+                "answer_ref": {
+                  "$ref": "envelope.v1.json#/$defs/artifact_ref"
+                },
+                "exit_code": {
+                  "oneOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "reason": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "description": "validate_answer.py run as a subprocess, unchanged. passed means exit 0."
+            },
+            "methods": {
+              "type": "object"
+            },
+            "limitations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "source",
+                  "text"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "artifact": {
+                    "$ref": "envelope.v1.json#/$defs/artifact_ref"
+                  }
+                }
+              }
+            },
+            "limits": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "value",
+                  "enforced_by"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "value": {},
+                  "enforced_by": {
+                    "enum": [
+                      "runtime",
+                      "engine",
+                      "advisory"
+                    ]
+                  },
+                  "observed": {},
+                  "note": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            },
+            "spend": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "reported_usd",
+                "completeness",
+                "source"
+              ],
+              "properties": {
+                "reported_usd": {
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "completeness": {
+                  "enum": [
+                    "complete",
+                    "partial",
+                    "unknown"
+                  ]
+                },
+                "source": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "note": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "description": "Unknown spend is unknown, not zero: reported_usd is null when completeness is unknown."
+            },
+            "versions": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "runtime",
+                "adapter",
+                "engine_sha"
+              ],
+              "properties": {
+                "runtime": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "adapter": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "engine_sha": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "x-examples": [
+    "examples/experiment-result.json",
+    "examples/experiment-result-failed.json"
+  ]
+}

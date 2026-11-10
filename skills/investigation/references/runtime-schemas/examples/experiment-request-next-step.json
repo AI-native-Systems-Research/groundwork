@@ -1,0 +1,36 @@
+{
+  "schema": "ains.experiment-request/v1",
+  "message_id": "req-0002",
+  "work_id": "w-prefix-cache-01",
+  "revision": 2,
+  "target": {
+    "repo_name": "llm-d-inference-scheduler",
+    "commit": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "artifacts": [],
+  "body": {
+    "capability": "spotlights-static",
+    "question": "Where does the prefix block size enter the scorer's hit computation?",
+    "task_type": "explain",
+    "objective": "find where block size is used in prefix hashing and scoring",
+    "locks": {},
+    "limits": {
+      "max_cost_usd": 5
+    },
+    "semantics": {
+      "include": [
+        "pkg/kvcache/kvblock"
+      ],
+      "models": {
+        "claude": "claude-sonnet-4-5",
+        "codex": "gpt-5-codex"
+      }
+    },
+    "next_step": {
+      "interpretation_of_prior": "Nous found 16 vs 64 tokens inconclusive at 3 iterations",
+      "remaining_uncertainty": "whether block size matters through hashing cost or through hit rate",
+      "expected_information_gain": "a code-level candidate list to test or rule out in a later Nous request",
+      "rationale": "cheap static pass before another simulator campaign; a later Nous run needs its own request and approval"
+    }
+  }
+}

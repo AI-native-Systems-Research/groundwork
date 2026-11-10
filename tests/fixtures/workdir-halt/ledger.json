@@ -1,0 +1,47 @@
+[
+  {
+    "iteration": 1,
+    "bundle_hash": "",
+    "claims_changed": true,
+    "best_changed": false,
+    "principles_changed": false,
+    "prereg_violation": false,
+    "status": "partial",
+    "stop_reason": null,
+    "cost_meter_usd": 0.5,
+    "tokens": {
+      "input": 10,
+      "output": 20
+    }
+  },
+  {
+    "iteration": 2,
+    "bundle_hash": "",
+    "claims_changed": true,
+    "best_changed": false,
+    "principles_changed": false,
+    "prereg_violation": false,
+    "status": "partial",
+    "stop_reason": null,
+    "cost_meter_usd": 0.5,
+    "tokens": {
+      "input": 10,
+      "output": 20
+    }
+  },
+  {
+    "iteration": 3,
+    "bundle_hash": "",
+    "claims_changed": true,
+    "best_changed": false,
+    "principles_changed": false,
+    "prereg_violation": false,
+    "status": "partial",
+    "stop_reason": "halt",
+    "cost_meter_usd": 0.5,
+    "tokens": {
+      "input": 10,
+      "output": 20
+    }
+  }
+]

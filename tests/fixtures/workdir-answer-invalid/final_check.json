@@ -1,0 +1,9 @@
+{
+  "answer_valid": false,
+  "evidence_errors": [
+    "claim C1: evidence path does not exist: nous_evidence/runs/iter-1/results/R1.json (searched work dir)"
+  ],
+  "repro_recorded": true,
+  "claims_matched_fraction": 1.0,
+  "unmeasured_noise_findings": []
+}

@@ -1,0 +1,125 @@
+{
+  "schema": "ains.experiment-result/v1",
+  "message_id": "res-0001",
+  "work_id": "w-prefix-cache-01",
+  "revision": 1,
+  "target": {
+    "repo_name": "llm-d-inference-scheduler",
+    "commit": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "artifacts": [],
+  "body": {
+    "invocation_id": "inv-0001",
+    "execution": {
+      "state": "completed",
+      "native_stop_reason": "max_iterations",
+      "exit_code": 0,
+      "started_at": "2026-11-09T18:05:00Z",
+      "ended_at": "2026-11-09T19:40:00Z",
+      "diagnostics": [
+        {
+          "kind": "engine-log",
+          "location": ".runtime/logs/inv-0001.engine.log",
+          "digest": "sha256:abababababababababababababababababababababababababababababababab",
+          "provisional": false
+        }
+      ]
+    },
+    "collection": {
+      "state": "collected",
+      "reason": null
+    },
+    "outcome": {
+      "classification": "inconclusive",
+      "hypothesis_ref": "req-0001:body.hypothesis",
+      "explanation": "effect within 2x noise SD in all iterations",
+      "partial": false,
+      "classified_by": "coordinator"
+    },
+    "findings": {
+      "claims_from": "answer-contract/v1",
+      "partial": false,
+      "claims": [
+        {
+          "id": "C1",
+          "metric": "p99_ttft_ms",
+          "value": 412.5,
+          "condition": "scorer weight 2, iteration 3",
+          "evidence": "runs/iter-3/results/R2.json"
+        }
+      ],
+      "hypotheses": [
+        {
+          "id": "H1",
+          "iteration": 3,
+          "classification": "inconclusive",
+          "native_status": "INCONCLUSIVE",
+          "error_type": "none",
+          "partial": false
+        }
+      ],
+      "answer_ref": {
+        "kind": "answer-json",
+        "location": "investigations/prefix-cache/final/answer.json",
+        "digest": "sha256:abababababababababababababababababababababababababababababababab",
+        "provisional": false
+      }
+    },
+    "validation": {
+      "state": "passed",
+      "validator": "validate_answer.py",
+      "exit_code": 0,
+      "answer_ref": {
+        "kind": "answer-json",
+        "location": "investigations/prefix-cache/final/answer.json",
+        "digest": "sha256:abababababababababababababababababababababababababababababababab",
+        "provisional": false
+      },
+      "report_ref": {
+        "kind": "validator-report",
+        "location": ".runtime/results/inv-0001.validation-1.txt",
+        "digest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "provisional": false
+      }
+    },
+    "methods": {
+      "baseline": "scorer weight 1",
+      "iterations": 3
+    },
+    "limitations": [
+      {
+        "source": "nous:ledger.status",
+        "text": "iteration 2 is partial (validation errors remained after repair)"
+      },
+      {
+        "source": "coordinator",
+        "text": "BLIS does not model KV eviction under memory pressure"
+      }
+    ],
+    "limits": [
+      {
+        "name": "max_iterations",
+        "value": 3,
+        "enforced_by": "engine",
+        "observed": 3
+      },
+      {
+        "name": "budget_usd",
+        "value": 20,
+        "enforced_by": "advisory"
+      }
+    ],
+    "spend": {
+      "reported_usd": 7.42,
+      "completeness": "partial",
+      "source": "ledger cost_meter_usd",
+      "note": "BASELINE cost is folded into iteration 1"
+    },
+    "versions": {
+      "runtime": "0.1.0",
+      "adapter": "nous/0.1.0",
+      "engine_sha": "e224cc1"
+    }
+  },
+  "reply_to": "req-0001"
+}

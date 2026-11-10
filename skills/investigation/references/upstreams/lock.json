@@ -1,0 +1,62 @@
+{
+  "_doc": "The only place upstream versions live. Bump an entry here, then re-verify the facts file for that upstream and set its verified_against to the new lock id. tests/test_upstreams.py fails until both agree. See README.md.",
+  "schema": 1,
+  "upstreams": {
+    "nous": {
+      "repo": "git@github.com:AI-native-Systems-Research/agentic-strategy-evolution.git",
+      "ref": "nous-v2-fixes",
+      "commit": "e224cc1694941957083238359c2bfbe8688ad71b",
+      "executable": "nous",
+      "dist": "nous",
+      "facts": "nous.json"
+    },
+    "spotlights": {
+      "repo": "https://github.com/AI-native-Systems-Research/spotlights.git",
+      "ref": "v0.1.1",
+      "commit": "cccc290f8dec4106fb940184b999b4b1180faf09",
+      "executables": ["spotlights-engine", "signal-pipeline"],
+      "dist": "spotlights_engine",
+      "facts": "spotlights.json"
+    },
+    "blis": {
+      "repo": "https://github.com/inference-sim/inference-sim.git",
+      "facts": "blis.json",
+      "catalog": {
+        "commit": "676326ec6c708e91ec4981bd6b03922a7fe60512",
+        "default_dir": "blis-catalog"
+      },
+      "binaries": {
+        "stock": {
+          "file": "bin/blis-stock-be78af83",
+          "sha256": "2a63c571b37ec09f00b483b41a7121e885afa058df3d7abbd7c9245975c50ce9",
+          "source_commit": "be78af832794aa53eb76a5cf3ba06140510e6ddd",
+          "router": "github.com/inference-sim/llm-d-router v1.0.0-blis.2",
+          "patches": []
+        },
+        "stock-v0.15.0": {
+          "file": "bin/blis-stock-v0.15.0",
+          "sha256": "ef1eb6ec07061f754c455749ae4af8322230890266e9a2a5fbe85c12a5db6fad",
+          "source_commit": "762f1605ff27cd825d6b2cb2d9e991cd4b864c91",
+          "router": "github.com/inference-sim/llm-d-router v1.0.0-blis.2",
+          "patches": []
+        },
+        "agg": {
+          "file": "bin/blis-agg-be78af83-fork-cc4cc8f6",
+          "sha256": "7e318b5e386f315e9533dbe8af4cbca46e2b83cfdf7f982ef30247b17c6e337e",
+          "source_commit": "be78af832794aa53eb76a5cf3ba06140510e6ddd",
+          "router": "llm-d-router fork cc4cc8f669d8484f600fdcf4f4686304f80980df (v1.0.0-blis.2 + 1)",
+          "patches": ["patches/0001-apparatus-utilization-detector-aggregation-parameter.patch",
+                      "patches/inference-sim-agg-go-mod.diff"]
+        },
+        "agg-v0.15.0": {
+          "file": "bin/blis-agg-v0.15.0-fork-cc4cc8f6",
+          "sha256": "0710fd8e86713b6b6b36ecd8758b5a6a768578927317816d087842d0076be87e",
+          "source_commit": "762f1605ff27cd825d6b2cb2d9e991cd4b864c91",
+          "router": "llm-d-router fork cc4cc8f669d8484f600fdcf4f4686304f80980df (v1.0.0-blis.2 + 1)",
+          "patches": ["patches/0001-apparatus-utilization-detector-aggregation-parameter.patch",
+                      "patches/inference-sim-agg-go-mod.diff"]
+        }
+      }
+    }
+  }
+}

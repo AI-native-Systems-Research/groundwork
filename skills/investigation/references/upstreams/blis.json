@@ -1,0 +1,48 @@
+{
+  "_doc": "What BLIS can and can't represent at the locked binaries. The Nous adapter enforces these and method-plan.md's table is generated from them. `pattern` is matched in full against each knob a request varies (`flag` knobs are BLIS run flags; `epp:` knobs are EndpointPickerConfig parameters set in the scenario). Re-verify with scripts/verify_upstreams.py when the lock changes.",
+  "verified_against": "blis@6772055d92a6",
+  "verified_on": "2026-11-10",
+  "removed": [
+    {"knobs": "--pd-* (P/D decider threshold and modes)", "on": "2026-11-10", "by": "owner",
+     "why": "the only --pd- flag at the locked binaries is --pd-transfer-contention (fabric contention, inference-sim cmd/root.go:750); the P/D decider is an EPP plugin (prefix-based-pd-decider, always-disagg-pd-decider; sim/llmd/support.go:52-53). Re-add only as that plugin's EPP parameter, verified at the locked binaries."},
+    {"knobs": "--block-size-in-tokens, --hash-chain-block-tokens (prefix block size)", "on": "2026-11-10", "by": "owner",
+     "why": "--block-size-in-tokens was removed in inference-sim #1851 (cmd/docs_examples_test.go:47 removedRunFlags; block size now comes from the scenario); --hash-chain-block-tokens appears nowhere in the BLIS source. Re-add only as the scenario field that carries it, verified at the locked binaries."}
+  ],
+  "facts": {
+    "required_locks": {
+      "value": ["blis_binary", "blis_binary_sha256", "catalog_commit"],
+      "source": "nous-blis.md pre-launch checks"
+    },
+    "representable_knobs": {
+      "value": [
+        {"pattern": "--kv-(cpu-blocks|offload-threshold|offload-config)", "label": "KV offload knobs",
+         "doc": "KV offload knobs (`--kv-cpu-blocks`, `--kv-offload-threshold`, `--kv-offload-config`)",
+         "flags": ["--kv-cpu-blocks", "--kv-offload-threshold", "--kv-offload-config"],
+         "source": "blis run --help at every locked binary"},
+        {"pattern": "--kv-event-delay", "label": "KV-event delay",
+         "doc": "KV-event delay (`--kv-event-delay`)",
+         "flags": ["--kv-event-delay"],
+         "source": "blis run --help at every locked binary; inference-sim cmd/router.go:43, sim/llmd/kvevents.go:23,118"},
+        {"pattern": "epp:precise-prefix-cache-producer\\.(speculativeIndexing|speculativeTTL)",
+         "label": "speculative indexing and its TTL (EndpointPickerConfig parameter)",
+         "doc": "Speculative indexing and its TTL (`epp:precise-prefix-cache-producer.speculativeIndexing`, `.speculativeTTL`, set in the scenario's EndpointPickerConfig)",
+         "source": "hosted on the simulation clock: router fork pkg/epp/framework/plugins/requestcontrol/dataproducer/preciseprefixcache/hosted.go:43-70,265-330 at v1.0.0-blis.2"}
+      ],
+      "source": "per entry"
+    },
+    "not_representable": {
+      "value": [
+        {"pattern": "scorer\\W+weights?|weights?\\s+(of|for)\\s+the\\s+\\S+\\s+scorer",
+         "label": "EPP scorer weights", "doc": "EPP scorer weights"},
+        {"pattern": "batch[- ]gateway", "label": "batch gateway", "doc": "batch gateway"},
+        {"pattern": "\\bWVA\\b|autoscal", "label": "WVA autoscaling", "doc": "WVA autoscaling"},
+        {"pattern": "time[- ]slic", "label": "RL time-slicing", "doc": "RL time-slicing"},
+        {"pattern": "wide[- ]EP\\b", "label": "wide-EP", "doc": "wide-EP"},
+        {"pattern": "approximate[- ]prefix|maxPrefixTokensToMatch",
+         "label": "approximate-prefix LRU / maxPrefixTokensToMatch",
+         "doc": "approximate-prefix LRU, `maxPrefixTokensToMatch`"}
+      ],
+      "source": "case-insensitive search over the request's question, objective, hypothesis and baseline; carried over from the pre-lock table"
+    }
+  }
+}

@@ -1,0 +1,338 @@
+# Nous v2 campaign: llm-d precise-path prefix-cache BLOCK-SIZE SWEEP.
+# One knob: --block-size-in-tokens in {8, 16, 32, 64}, control = the shipped default 16 (B-ship),
+# everything else held at shipped config, measured in the BLIS simulator.
+#
+# Study: /Users/kelly/git/ains-loop/studies/blocksize-sweep/ — question.md holds the
+# pre-registered question, falsifier and apparatus pins; grounding.md holds where the lever
+# lives in llm-d-router. Authored 2026-11-05.
+#
+# The apparatus (pinned BLIS binary, catalog, traces, and the locked scripts/blocksize/ tree)
+# lives at /Users/kelly/git/nous-run/nous-campaigns/blis-pd-decider-threshold and is referenced
+# by absolute path only; it is NEVER modified by this campaign.
+#
+# locked_parameters.apparatus_manifest_sha256 is the sha256 of ROOT/scripts/blocksize/
+# MANIFEST.sha256 (filled 2026-11-05 after the manifest was generated and verified).
+
+research_question: >
+  Does llm-d's shipped precise-path prefix-cache block size of 16 tokens still hold across the
+  A1 workload set (W1-W4, C0, W5t, W5w, W6 on layouts 2P/6D, 3P/5D, 4P/4D at 25 GB/s, seeds 1-3,
+  BLIS simulator), or does some alternative in {8, 32, 64} improve the gated capacity-or-hit-rate
+  headline metric by 5% or more over B-ship (16) on at least one workload while staying inside
+  the TTFT/TPOT stage gates? The pre-registered verdict metric is blocksize_max_gated_gain_pct:
+  16 stands iff it is below 5.0.
+
+run_id: llmd-blocksize-sweep
+
+# Verification/measurement campaign: a pre-registered claim ("16 is the right default") checked
+# by a locked sweep and a locked analysis. baseline.schema.json for `verify` wants
+# observation.points = [{condition, predicted, measured}] — the BASELINE section below says
+# exactly what to record (the rehearsal's b16-referenced verdict value).
+task_type: verify
+
+max_iterations: 2
+# stall_iterations left at the default (2): with max_iterations 2 the max-iterations stop fires
+# first, and iteration 2 is expected to answer the question outright.
+
+target_system:
+  name: BLIS (inference-sim) llm-d prefix-cache block-size sweep
+  # The investigation repo. Nous v2 works in a worktree of this repo
+  # (<repo>/.nous-experiments/llmd-blocksize-sweep, branch nous/llmd-blocksize-sweep); the
+  # BLIS apparatus is NOT this repo and is only ever referenced by absolute path.
+  repo_path: /Users/kelly/git/ains-loop
+  description: |
+    ## What this campaign is
+
+    A pre-registered measurement sweep of ONE knob in the BLIS simulator: the precise-path
+    prefix-cache block size, `--block-size-in-tokens`, over {8, 16, 32, 64}. Block size 16 is
+    B-ship (the shipped llm-d default) and the control arm in every comparison. Everything else
+    is held at shipped config: the P/D decider stays the prefix-threshold decider at T=16
+    (NOT swept here — that was campaign llmd-a1-pd-threshold), `--hash-chain-block-tokens`
+    stays at the trace-appropriate value (64 for the Weka trace, 512 for every other trace),
+    and all model/hardware/layout/bandwidth settings stay as the A1 apparatus ships them.
+
+    **This campaign runs a fixed, pre-registered driver and a locked analysis. It does not
+    evolve code and it changes NO code anywhere.**
+    - NEVER modify the BLIS apparatus at
+      `/Users/kelly/git/nous-run/nous-campaigns/blis-pd-decider-threshold` (called ROOT below):
+      not the pinned binary `bin/blis-9addaae2`
+      (sha256 43dbef622ece2aef6034bad9f701352db4451a81326db2564361add449d5eb4d), not the
+      catalog (git repo, deliberately pinned at commit
+      6fe4664576bc43d601bba6619aca4fbb42c5087b — never `git pull` it), not the traces, not the
+      scripts. ROOT is referenced by absolute path only.
+    - NEVER modify `/Users/kelly/git/ains-loop` itself either: Nous gave you a working copy (a
+      git worktree of it) and that is the only repo you work in. Your writable surface is your
+      Nous artifact files (`baseline.json`, `runs/iter-N/*.json`, `answer.json`, `report.md`)
+      and the results directories the driver creates under your work dir. Nothing else.
+    - Never hand-tune: no arm, seed, workload, layout, threshold, target or rule may change
+      after seeing results. No BLIS runs beyond what `driver.py` schedules. Ideas for follow-ups
+      go in the findings text, not into extra runs.
+    - Report failures plainly, with their output. A failing stage gate or an odd curve is a
+      result, not a bug to fix. Never re-run a BLIS job to "fix" it; report the anomaly.
+    - You never invent a number. Every number you report comes from a file the driver or the
+      locked analysis wrote, and your evidence citations must point at those files so a
+      validator can re-read them (see "Findings and evidence" below).
+
+    ## Where things run
+
+    - ROOT (apparatus, read-only): `/Users/kelly/git/nous-run/nous-campaigns/blis-pd-decider-threshold`
+    - Your work dir: the `NOUS_WORK_DIR` environment variable (`echo "$NOUS_WORK_DIR"`). Written
+      `$WORK` below. Every result path below is under `$WORK`. When in doubt, trust
+      `$NOUS_WORK_DIR`, not an assumed location.
+    - Your working copy (cwd): the Nous worktree of `/Users/kelly/git/ains-loop`. The driver and
+      analysis are invoked by absolute ROOT path, so cwd barely matters, but artifact files go
+      under `$WORK`, not the repo.
+    - Source the apparatus environment before any driver/analysis call:
+      `source ROOT/env.sh` (sets PATH and BLIS_CATALOG).
+
+    ## The locked scripts (hash-locked by ROOT/scripts/blocksize/MANIFEST.sha256)
+
+    - `ROOT/scripts/blocksize/blocksize.py` — definitions: the run matrix, arms, workloads,
+      layouts, flags. Authoritative for what runs; do not re-derive it.
+    - `ROOT/scripts/blocksize/driver.py DIR {rehearsal|full}` — the scheduler. Detached and
+      idempotent; writes `jobs.json` (the run matrix), `progress.json`, `det.json`
+      (determinism sample) and the `DRIVER_DONE` sentinel under DIR. It checks the BLIS binary
+      sha256 itself and refuses to double-drive one directory. It passes
+      `--block-size-in-tokens` explicitly on every run so the arm is always pinned.
+    - `ROOT/scripts/blocksize/analysis.py DIR` — the locked, pre-registered analysis. Writes
+      `DIR/analysis/objective_metadata.json` (the verdict), `DIR/analysis/summary.json`
+      (everything) and `DIR/analysis/tables.md` (human-readable per-workload curves).
+    - `ROOT/scripts/blocksize/wait.sh DIR` — polls the driver.
+
+    ## Iteration plan (fixed: BASELINE + 2 iterations)
+
+    **BASELINE — the B-ship rehearsal measurement.** Run the rehearsal sweep (cheap subset,
+    seed 42) into a baseline dir and record its b16-referenced verdict:
+
+    ```
+    source ROOT/env.sh
+    mkdir -p "$WORK/baseline/results"
+    nohup python3 ROOT/scripts/blocksize/driver.py "$WORK/baseline/results/blocksize" rehearsal > "$WORK/baseline/results/blocksize.driver.log" 2>&1 &
+    ROOT/scripts/blocksize/wait.sh "$WORK/baseline/results/blocksize"     # repeat until exit 0
+    python3 ROOT/scripts/blocksize/analysis.py "$WORK/baseline/results/blocksize"
+    ```
+
+    Then write `baseline.json` (task_type `verify`):
+    - `command`: the driver+wait+analysis chain above as one line.
+    - `git_sha`: `git rev-parse HEAD` in your working copy.
+    - `observation.points`: one point —
+      `condition`: "B-ship --block-size-in-tokens 16, rehearsal subset, seed 42, all else shipped config",
+      `predicted`: "blocksize_max_gated_gain_pct < 5.0 (the shipped 16 stands: no alternative in {8,32,64} gains >= 5% within the latency gates)",
+      `measured`: the `blocksize_max_gated_gain_pct` value copied exactly from
+      `$WORK/baseline/results/blocksize/analysis/objective_metadata.json`.
+    - `metrics_path`: `baseline/results/blocksize/analysis/objective_metadata.json`.
+    - `noise`: `{deterministic: true}` iff `det.json` shows the determinism sample passed
+      (repeats identical); if it did not, report the anomaly and record
+      `{unmeasured: true, reason: ...}` instead — do not fix anything.
+
+    Before the baseline run, verify the apparatus (read-only):
+    `(cd ROOT && shasum -a 256 -c scripts/blocksize/MANIFEST.sha256)` — every line OK;
+    `git -C ROOT/blis-catalog rev-parse HEAD` — 6fe4664576bc43d601bba6619aca4fbb42c5087b.
+
+    **ITERATION 1 — REHEARSAL.** Same driver, mode `rehearsal` (seed 42, cheap subset,
+    determinism sample), results dir for iteration N being `$WORK/runs/iter-N/results/`:
+
+    ```
+    source ROOT/env.sh
+    mkdir -p "$WORK/runs/iter-1/results"
+    nohup python3 ROOT/scripts/blocksize/driver.py "$WORK/runs/iter-1/results/blocksize" rehearsal > "$WORK/runs/iter-1/results/blocksize.driver.log" 2>&1 &
+    ROOT/scripts/blocksize/wait.sh "$WORK/runs/iter-1/results/blocksize"     # repeat until exit 0
+    python3 ROOT/scripts/blocksize/analysis.py "$WORK/runs/iter-1/results/blocksize"
+    ```
+
+    - Poll `wait.sh` until exit 0; read `$WORK/runs/iter-1/results/blocksize/progress.json` for
+      progress. Each `wait.sh` call is bounded (~8 min in the A1 apparatus — use a Bash tool
+      timeout of 600000 ms and call again while it returns non-zero). Never `sleep` more than
+      480 s in one call.
+    - If the driver died (no driver process left and `progress.json` frozen), re-launch the
+      exact same nohup line once — the driver is idempotent and reuses finished runs. Never
+      re-run an individual BLIS job by hand.
+    - The iteration-1 rehearsal MUST reproduce the BASELINE rehearsal exactly: `diff` the two
+      `analysis/objective_metadata.json` and `analysis/summary.json`. Any difference is an
+      apparatus fault: stop and report it; do not fix it.
+    - Findings from the rehearsal are rehearsal-scoped: mark hypotheses with rehearsal
+      evidence, keep `question_answered: false` (a seed-42 subset cannot answer the question),
+      and do NOT set `findings.best` in this iteration (the rehearsal must not enter the
+      best-found ranking).
+
+    **ITERATION 2 — FULL.** First run every pre-launch check (below). Then:
+
+    ```
+    source ROOT/env.sh
+    mkdir -p "$WORK/runs/iter-2/results"
+    nohup python3 ROOT/scripts/blocksize/driver.py "$WORK/runs/iter-2/results/blocksize" full > "$WORK/runs/iter-2/results/blocksize.driver.log" 2>&1 &
+    ROOT/scripts/blocksize/wait.sh "$WORK/runs/iter-2/results/blocksize"     # repeat until exit 0
+    python3 ROOT/scripts/blocksize/analysis.py "$WORK/runs/iter-2/results/blocksize"
+    ```
+
+    Expect a multi-hour, tens-of-GB run (the A1 full sweep was ~4 h and ~60 GB; this sweep has
+    4 arms on the same workload/layout grid). `metrics.json` files hold per-request arrays —
+    never cat them; read `progress.json`, `jobs.json` and the analysis outputs instead.
+
+    **Pre-launch checks before iteration 2 (all read-only; every one must pass or you stop and
+    report):**
+    ```
+    (cd ROOT && shasum -a 256 -c scripts/blocksize/MANIFEST.sha256)   # every line OK
+    (cd ROOT && shasum -a 256 scripts/blocksize/MANIFEST.sha256)      # digest == locked_parameters.apparatus_manifest_sha256 in this campaign.yaml
+    git -C ROOT/blis-catalog rev-parse HEAD                           # == 6fe4664576bc43d601bba6619aca4fbb42c5087b
+    df -h ROOT                                                        # > 100 GB available on that volume
+    pgrep -fl "blis-9addaae2|blocksize/driver.py"                     # must be empty (nothing already running)
+    ls "$WORK/runs/iter-2/results/blocksize" 2>/dev/null              # absent, or no jobs.json / DRIVER_DONE (no collision)
+    ```
+
+    ## Arms, layouts, workloads (blocksize.py is authoritative)
+
+    - Arms (4): `--block-size-in-tokens` in {8, 16, 32, 64}. b16 = B-ship, the control in every
+      comparison. Every alternative is judged only against b16 on the same workload, layout and
+      seed. Decision (2026-11-05): B-ship = 16 uniformly, including weka — so the 64 arm on
+      weka doubles as a test of whether A1's block-size-64 choice there actually mattered. The
+      weka sidecar's 64-token hash blocks are a property of the trace and stay at
+      `--hash-chain-block-tokens 64`; only the cache block size moves.
+    - Layouts: 2P/6D, 3P/5D, 4P/4D (8 H200 TP4 pods), plus agg8 (8 aggregated pods, no P/D) as
+      reference context only. Bandwidth 25 GB/s.
+    - Workloads: W1 (ISL 5000 / OSL 250), W2 (ISL 256 / OSL 4096), W3 (2048/2048), W4 (150
+      prefix groups, 6000-token shared prefix + 1200 / OSL 1000), C0 (ISL 200 / OSL 200, zero
+      reuse, control), W5t (Mooncake toolagent), W5w (Weka Claude Code), W6 (Mooncake
+      conversation).
+    - Every run otherwise uses the A1 shipped configuration: model
+      llama-4-scout-17b-16e-instruct-fp8-dynamic, `--hardware H200 --tp 4 --latency-model
+      trained-physics --max-model-len 1048576`, `--num-instances 8 --routing-policy weighted
+      --pd-transfer-contention --pd-transfer-sizing uncached`.
+    - Seeds: full = 1, 2, 3 (a seed varies arrivals, token content and the trace sample);
+      rehearsal = 42 (never an evaluation seed).
+
+    ## Stage gates and verdict (pre-registered; analysis.py is authoritative)
+
+    - Per-request targets, joint: TTFT <= max(3 s, ISL / 20,000 tok/s) and mean TPOT <= 100 ms.
+    - A stage passes iff, on seed means: attainment >= 0.90, failure fraction <= 0.005,
+      achieved/offered >= 0.95. Failures (dropped, unfinished, length-capped) count as misses.
+    - Per workload, the headline metric is the one the locked analysis scores (SLO-bounded
+      capacity, or prefix-cache hit rate where that is the headline for the workload) — fixed
+      in blocksize.py/analysis.py; do not re-derive or substitute it.
+    - **Verdict metric: `blocksize_max_gated_gain_pct`** — the largest percentage gain of any
+      alternative in {8, 32, 64} over b16 on any workload, averaged over seeds 1-3, counting
+      only gains that hold inside the TTFT/TPOT stage gates. Computed only by
+      `analysis.py`; its output IS the verdict.
+    - **Pre-registered rule: 16 stands iff `blocksize_max_gated_gain_pct` < 5.0.** It is wrong
+      (16 fails) iff some alternative gains >= 5.0 on at least one workload within the gates.
+
+    ## Findings and evidence
+
+    - Suggested bundle (you own the exact wording): h-main "b16-stands" — prediction
+      `{metric: blocksize_max_gated_gain_pct, direction: equal, magnitude_or_threshold:
+      "< 5.0"}`, CONFIRMED iff the full-sweep value is < 5.0, REFUTED iff >= 5.0; plus
+      hypotheses for the per-workload dose-response curve (does hit rate move monotonically
+      with block size), the latency gates, and the weka-64 question. Natural mechanism
+      families: cache geometry (finer blocks, finer reuse, more index/transfer overhead),
+      block overhead (coarser blocks, less per-block overhead, more wasted transfer), and the
+      decider confound (block size feeds the P/D decider arithmetic). Every hypothesis's
+      control is the b16 arm inside the same driver directory (same workloads, layouts,
+      seeds); the locked analysis computes every gain against it.
+    - In `plan.json`, spell the locked keys in each run's `parameters` exactly as they appear
+      in this campaign's `locked_parameters` (copy values verbatim) so the lock validator can
+      check them. `block_size_in_tokens` is the swept variable and is NOT locked. Exception: a
+      run pinning one trace's hash-chain value lists `hash_chain_block_tokens` in its
+      `workload_changes` (the locked map is the campaign-level rule; the per-run value is its
+      specialization). The driver run outlasts the turn: set its `wait_for` to the `DRIVER_DONE`
+      file path under the results dir.
+    - **Evidence citation (the validator re-reads every citation):**
+      - Cite only files under your work dir or your repo working copy, by path RELATIVE to the
+        work dir (e.g. `runs/iter-2/results/blocksize/analysis/objective_metadata.json`).
+        Relative paths resolve against the iteration dir, then the work dir, then the repo.
+        Absolute paths are accepted only inside those roots — ROOT
+        (/Users/kelly/git/nous-run/...) is outside all of them, so NEVER cite apparatus files;
+        cite the copies the driver and analysis wrote under `$WORK`.
+      - Key formats: `.json` a JSON pointer (`/blocksize_max_gated_gain_pct` or the real
+        pointer to the value); `.jsonl` `line@pointer`; `.csv`/`.tsv` `column@row`; other text
+        (`tables.md`, logs) a regex with ONE capture group. Copy values exactly — the
+        validator compares them.
+      - In `answer.json` claims, prefer `evidence_detail: {path, key, value}` with the value
+        copied exactly from the file. Nous copies cited files into `nous_evidence/` at REPORT.
+    - **Objective metric.** In iteration 2 ONLY, set `findings.best = {metric:
+      blocksize_max_gated_gain_pct, value: <copied exactly from
+      runs/iter-2/results/blocksize/analysis/objective_metadata.json>}`. The headline claim of
+      the campaign is that number. Report the per-workload curve from `tables.md` in
+      `report.md` and as claims backed by `tables.md`/`summary.json`. `answer.repro`: one
+      command, no leading `cd` — the locked analysis over the full results dir, e.g.
+      `python3 /Users/kelly/git/nous-run/nous-campaigns/blis-pd-decider-threshold/scripts/blocksize/analysis.py <absolute $WORK>/runs/iter-2/results/blocksize`.
+
+    ## Known limits (state these in findings AND in the final answer)
+
+    - BLIS cannot represent the approximate-prefix LRU or `maxPrefixTokensToMatch`. The sweep
+      speaks only about the precise block-size axis; it says nothing about the approximate
+      path's auto-tuning, its 64-token floor, or its per-model behavior.
+    - Block size feeds the P/D decider arithmetic (`nonCachedTokens = inputTokens -
+      cachedBlocks * blockSize`), and the decider threshold is held at 16: changing block size
+      can move disaggregation decisions too, not just hit rates. This held-threshold confound
+      is inherent to the precise-path question and must be stated, not "fixed".
+    - W4's working set fits in cache (it tests prefix sharing, not cache pressure); weka
+      capacity is low, TPOT-driven and strongly sample-dependent (A1 caveats that carry over).
+
+# Higher = stronger evidence the shipped default is wrong. The pre-registered decision
+# threshold 5.0 lives in locked_parameters.gain_threshold_pct and in the description.
+objective:
+  metric: blocksize_max_gated_gain_pct
+  direction: increase
+
+models:
+  # Mechanical campaign: pre-registered driver + locked analysis; the agent babysits,
+  # reads numbers and writes artifacts. Model note: the endpoint 403'd claude-sonnet-5
+  # (catalog now serves GLM models on the Anthropic path — Kelly 2026-11-05); this is
+  # the model the owner's Claude Code runs on, proven on the same SDK/auth path.
+  session: rits/zai-org/glm-5-3
+
+# Mechanical phases; the description pre-registers everything. EffortManager steps down
+# automatically if outputs get cut.
+effort: medium
+
+# Only the agent's own driver/analysis/direct-BLIS invocations count as experiment runs.
+# wait.sh polling is deliberately NOT matched (it would eat the run budget); read-only
+# checks (shasum, git, df, pgrep) do not match either.
+experiment_commands:
+  - '\bblocksize/driver\.py\b'
+  - '\bblocksize/analysis\.py\b'
+  - '\bblis-9addaae2\b'
+
+# Generous ceiling: expected experiment commands are ~6 (driver+analysis x baseline/iter-1/
+# iter-2) plus any idempotent driver re-launches after a crash.
+task_limits:
+  max_runs: 30
+
+# A move of the verdict metric smaller than the pre-registered gain threshold is not a
+# changed conclusion (mirrors gain_threshold_pct).
+min_improvement: 5.0
+
+# Flat map. plan.json runs that spell these keys must match verbatim (or list the key in
+# workload_changes). block_size_in_tokens is deliberately NOT locked — it is the swept arm.
+locked_parameters:
+  model: llama-4-scout-17b-16e-instruct-fp8-dynamic
+  hardware: H200
+  tp: 4
+  max_model_len: 1048576
+  num_instances_total: 8
+  layouts: ["2P/6D", "3P/5D", "4P/4D"]
+  layout_reference: "agg8 (8 aggregated pods, no P/D; reference context only)"
+  routing_policy: weighted
+  pd_transfer_contention: true
+  pd_transfer_sizing: uncached
+  latency_model: trained-physics
+  pd_decider: "prefix-threshold, T=16, fixed (not swept)"
+  block_size_arms: [8, 16, 32, 64]
+  b_ship: 16
+  b_ship_scope: "uniform across all workloads including weka (decision 2026-11-05)"
+  hash_chain_block_tokens: {weka: 64, others: 512}
+  workloads: [W1, W2, W3, W4, C0, W5t, W5w, W6]
+  bandwidth_main_gbps: 25
+  evaluation_seeds: [1, 2, 3]
+  rehearsal_seed: 42
+  ttft_target: "max(3 s, ISL / 20000 tok/s), per request"
+  tpot_target_ms: 100
+  stage_gate: "seed means: attainment >= 0.90, failure fraction <= 0.005, achieved/offered >= 0.95"
+  attainment_min: 0.90
+  fail_fraction_max: 0.005
+  achieved_offered_min: 0.95
+  gain_threshold_pct: 5.0
+  blis_binary: bin/blis-9addaae2
+  blis_binary_sha256: 43dbef622ece2aef6034bad9f701352db4451a81326db2564361add449d5eb4d
+  blis_catalog_commit: 6fe4664576bc43d601bba6619aca4fbb42c5087b
+  apparatus_manifest: scripts/blocksize/MANIFEST.sha256
+  apparatus_manifest_sha256: 529463ef1a2f92dc804411c5b7cc98c93504d3dbfa4d3ce25ad05a8e8108f07e

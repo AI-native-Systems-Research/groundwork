@@ -1,0 +1,1 @@
+{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"pod":"vllm-decode-0"},"values":[[1762336800,"3"],[1762336830,"4"],[1762336860,"5"],[1762336890,"4"]]},{"metric":{"pod":"vllm-decode-1"},"values":[[1762336800,"1"],[1762336830,"2"],[1762336860,"NaN"],[1762336890,"2"]]}]},"stats":{"seriesFetched":"2","executionTimeMsec":3}}

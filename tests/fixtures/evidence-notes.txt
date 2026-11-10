@@ -1,0 +1,5 @@
+Study pd-decider-vs-threshold - aggregate outcome over 3 seeds.
+
+Winning policy: PD-decider (beats threshold-static on mean throughput
+at an equal p99 budget; the decision held after 12 iterations on seed 1
+and seed 3, 11 on seed 2).

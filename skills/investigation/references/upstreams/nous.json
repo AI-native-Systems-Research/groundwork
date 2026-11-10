@@ -1,0 +1,69 @@
+{
+  "_doc": "Facts about Nous at the locked commit. Sources are paths under orchestrator/ in the Nous repo at that commit. Re-verify every entry when the lock changes.",
+  "verified_against": "nous@90aaedc338e3",
+  "verified_on": "2026-11-10",
+  "facts": {
+    "known_campaign_keys": {
+      "value": ["research_question", "target_system", "run_id", "max_iterations", "models",
+                "locked_parameters", "locked_workload", "effort", "human_gates", "secrets",
+                "min_improvement", "stall_iterations", "task_type", "session_scope",
+                "experiment_commands", "task_limits", "objective", "rerun_repro"],
+      "source": "v2/config.py:12-17 _KNOWN_KEYS; other keys are logged and ignored (config.py:56-57)"
+    },
+    "campaign_keys": {
+      "value": ["research_question", "run_id", "max_iterations", "task_type", "models",
+                "target_system", "objective", "locked_parameters", "locked_workload",
+                "experiment_commands", "task_limits", "min_improvement",
+                "stall_iterations", "effort", "session_scope", "secrets"],
+      "source": "adapter choice: known_campaign_keys minus human_gates (no code reads it) and rerun_repro (not offered)"
+    },
+    "ignored_keys": {
+      "value": ["prompts", "metadata", "ground_truth", "iterations", "domain_adapter_layer",
+                "human_gates"],
+      "source": "not in _KNOWN_KEYS (v2/config.py:12-17), or in it but unread (human_gates)"
+    },
+    "target_system_keys": {
+      "value": ["name", "description"],
+      "source": "v2/config.py:50-52 requires repo_path, which the adapter sets itself"
+    },
+    "optional_passthrough": {
+      "value": ["locked_workload", "experiment_commands", "task_limits", "min_improvement",
+                "stall_iterations", "effort", "session_scope", "secrets"],
+      "source": "known_campaign_keys rendered verbatim when the request sets them"
+    },
+    "effort_levels": {
+      "value": ["max", "xhigh", "high", "medium", "low"],
+      "source": "v2/effort.py:12 EFFORT_LADDER"
+    },
+    "session_scopes": {
+      "value": ["campaign", "iteration"],
+      "source": "v2/loop.py:236"
+    },
+    "objective_directions": {
+      "value": ["increase", "decrease"],
+      "source": "v2/stop_rule.py:57"
+    },
+    "completed_stop_reasons": {
+      "value": ["answered", "max_iterations", "stall"],
+      "source": "v2/schemas/ledger_entry.schema.json:18-20 stop_reason enum (the others are null, halt, stop_sentinel)"
+    },
+    "native_files": {
+      "value": [["nous-state", "state.json"], ["nous-ledger", "ledger.json"],
+                ["nous-final-check", "final_check.json"], ["nous-halt", "halt.json"],
+                ["nous-answer", "answer.json"], ["nous-stop-sentinel", "STOP"]],
+      "source": "v2/resume.py:20, v2/final_check.py:108, v2/hooks.py:144; STOP from cli.py `nous stop`"
+    },
+    "sigint_exit": {
+      "value": 130,
+      "source": "cli.py:485-487 (KeyboardInterrupt -> sys.exit(130))"
+    },
+    "campaign_parent_env": {
+      "value": "NOUS_CAMPAIGN_PARENT",
+      "source": "work_dir_resolver.py:53 ENV_VAR"
+    },
+    "worktree_dir": {
+      "value": ".nous-experiments",
+      "source": "v2/loop.py:41 EXPERIMENTS_DIR"
+    }
+  }
+}

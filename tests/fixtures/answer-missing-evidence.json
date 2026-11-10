@@ -1,0 +1,14 @@
+{
+  "answer": "Yes - PD-decider wins on throughput at equal p99.",
+  "deliverable": "deliverable.md",
+  "repro": "python3 scripts/run_study.py --question q1 --seeds 3",
+  "claims": [
+    {
+      "id": "c1",
+      "metric": "throughput_rps_mean",
+      "value": 4100.5,
+      "condition": "BLIS sim, 3 seeds, PD-decider, p99 budget 3.2ms",
+      "evidence": "evidence/nope.json"
+    }
+  ]
+}

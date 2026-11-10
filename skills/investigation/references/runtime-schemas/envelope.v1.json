@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://groundwork.local/runtime-schemas/envelope.v1.json",
+  "title": "AINS message envelope v1",
+  "description": "Documentation only. The authoritative validator is scripts/ains_runtime/contracts.py (stdlib, no jsonschema dependency); where this document and the code disagree, the code wins and this file is a bug. Every message type shares this envelope; `body` is type-specific. Strings must not contain the value of any environment variable whose name matches KEY|TOKEN|SECRET|PASSWORD|AUTH (values of 8+ chars); such a message is rejected (not expressible in JSON Schema).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "message_id",
+    "work_id",
+    "revision",
+    "target",
+    "artifacts",
+    "body"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "pattern": "^ains\\.(experiment-request|receipt|progress|clarification|cancel|experiment-result)/v1$",
+      "description": "ains.<type>/v<N>. Any version this runtime does not list in SCHEMA_VERSIONS is rejected."
+    },
+    "message_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+      "description": "Unique per payload. Same id + same payload returns the stored receipt; same id + different payload is a conflict."
+    },
+    "work_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "A new work item starts at 1; each new experiment-request for the same work must be strictly newer. Other messages must carry the work's current revision."
+    },
+    "reply_to": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+      "description": "Optional; required for receipts and clarification answers."
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repo_name",
+        "commit"
+      ],
+      "properties": {
+        "repo_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/artifact_ref"
+      }
+    },
+    "body": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "artifact_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "location",
+        "provisional"
+      ],
+      "description": "A digest is required unless provisional is true. A local path is a location, never an identity; the digest is the identity.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "location": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "provisional": {
+          "type": "boolean"
+        }
+      },
+      "if": {
+        "properties": {
+          "provisional": {
+            "const": false
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "digest"
+        ]
+      }
+    }
+  }
+}

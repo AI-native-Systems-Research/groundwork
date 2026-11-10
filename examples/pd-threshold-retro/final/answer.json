@@ -1,0 +1,42 @@
+{
+  "answer": "No. A fitted per-layout rule for the P/D threshold (G-L family: T=8192 at 2P/6D, T=16 at 3P/5D) does not beat the shipped T=16 as a deployable rule. It raises capacity substantially where it engages — +29.7% to +83.4% over shipped T=16 at 2P/6D on the win cells (W5t toolagent +29.7%, W1 prefill-heavy +83.4%) — but it breaches the pre-registered guardrails on held-out cells (regret failures at W5t/4P-4D and W5w/4P-4D, an attainment failure at W5w/2P-6D), so the gated-gain verdict is -100.0%: the rule does not clear the gain gate while holding every guardrail. Keep 16.",
+  "deliverable": null,
+  "repro": "python3 /Users/kelly/git/nous-run/nous-campaigns/blis-pd-decider-threshold/scripts/a1/capacity.py /Users/kelly/git/nous-run/work/llmd-a1-pd-threshold/runs/iter-2/results/a1",
+  "claims": [
+    {
+      "id": "c1",
+      "metric": "a1_guidance_gated_gain_pct",
+      "value": -100.0,
+      "condition": "A1 campaign, real iteration (seeds 1-3), fitted G-L rule vs shipped T=16, gain gate >=5% with all guardrails, controls, and held-out-win checks passing",
+      "evidence": "/Users/kelly/git/nous-run/work/llmd-a1-pd-threshold/runs/iter-2/results/a1/analysis/objective_metadata.json"
+    },
+    {
+      "id": "c2",
+      "metric": "guided_capacity_gain_pct_vs_t16",
+      "value": 29.7,
+      "condition": "W5t (toolagent trace), 2P/6D layout, 25 GB/s, fitted rule t8192 vs shipped t16, seeds 1-3",
+      "evidence": "/Users/kelly/git/nous-run/work/llmd-a1-pd-threshold/runs/iter-2/results/a1/analysis/tables.md"
+    },
+    {
+      "id": "c3",
+      "metric": "guided_capacity_gain_pct_vs_t16",
+      "value": 83.4,
+      "condition": "W1 (prefill-heavy synthetic), 2P/6D layout, 25 GB/s, fitted rule t8192 vs shipped t16, seeds 1-3",
+      "evidence": "/Users/kelly/git/nous-run/work/llmd-a1-pd-threshold/runs/iter-2/results/a1/analysis/tables.md"
+    },
+    {
+      "id": "c4",
+      "metric": "fitted_threshold_2p6d",
+      "value": 8192,
+      "condition": "G-L family fitted on derivation cells, 2P/6D layout",
+      "evidence": "/Users/kelly/git/nous-run/work/llmd-a1-pd-threshold/runs/iter-2/results/a1/analysis/objective_metadata.json"
+    },
+    {
+      "id": "c5",
+      "metric": "fitted_threshold_3p5d",
+      "value": 16,
+      "condition": "G-L family fitted on derivation cells, 3P/5D layout",
+      "evidence": "/Users/kelly/git/nous-run/work/llmd-a1-pd-threshold/runs/iter-2/results/a1/analysis/objective_metadata.json"
+    }
+  ]
+}

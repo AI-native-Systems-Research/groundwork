@@ -1,0 +1,15 @@
+{
+  "answer": "Yes, p99 fell to 41.8 ms, but claim C1's evidence file is missing.",
+  "deliverable": "toy_cache.py --cache-size 256",
+  "repro": "python toy_cache.py --cache-size 256 --seeds 1,2,3 --json",
+  "claims": [
+    {
+      "id": "C1", "metric": "p99_ms", "value": 41.8, "condition": "cache_size=256",
+      "evidence": "nous_evidence/runs/iter-1/results/R1.json"
+    },
+    {
+      "id": "C2", "metric": "hit_rate", "value": 0.78, "condition": "cache_size=256",
+      "evidence": "nous_evidence/runs/iter-1/results/R1.json"
+    }
+  ]
+}

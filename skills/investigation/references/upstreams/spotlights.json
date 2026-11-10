@@ -1,0 +1,56 @@
+{
+  "_doc": "Facts about Spotlights at the locked commit. Sources are paths under src/spotlights_engine/ at that commit. Re-verify every entry when the lock changes.",
+  "verified_against": "spotlights@fb9ad3943679",
+  "verified_on": "2026-11-10",
+  "facts": {
+    "file_vars": {
+      "value": ["SPOTLIGHTS_MODELS_FILE", "SPOTLIGHTS_RATES_FILE",
+                "SPOTLIGHTS_EXTERNAL_RATES_FILE", "SPOTLIGHTS_CLAUDE_BIN"],
+      "source": "every SPOTLIGHTS_* name under src/ (git grep); model_config.py:25, costing/rates.py:24-25, _subprocess_util.py:59"
+    },
+    "material_vars": {
+      "value": ["CODEX_HOME"],
+      "source": "decides which codex config.toml is read"
+    },
+    "codex_model_re": {
+      "value": "^[\\w.\\-/\\[\\]]+$",
+      "source": "cli.py:475 _CODEX_MODEL_RE"
+    },
+    "claude_model_re": {
+      "value": "^\\S+$",
+      "source": "cli.py:480 _CLAUDE_MODEL_RE"
+    },
+    "module_segment_re": {
+      "value": "^[a-z][a-z0-9_]*$",
+      "source": "schemas/project.py:17 _NAME_PATTERN"
+    },
+    "module_segment_invalid_chars": {
+      "value": "[^a-z0-9_]",
+      "source": "schemas/project.py:18 _INVALID_SEGMENT_CHARS; _normalize_module_segment (21) prefixes m_ when the result does not start with a letter"
+    },
+    "dry_run_fields": {
+      "value": ["scope", "claude-model", "codex-model"],
+      "source": "cli.py:879-899 (dry-run printout)"
+    },
+    "bad_models_exit": {
+      "value": 2,
+      "source": "cli.py:874, 912"
+    },
+    "max_cost_advisory": {
+      "value": true,
+      "source": "cli.py:314,839-840: --max-cost is validated (> 0) and printed, never enforced"
+    },
+    "unmatched_include": {
+      "value": "warn-and-skip",
+      "source": "spotlights_manager/filters.py:56-112: an include name matching no module is warned about and skipped"
+    },
+    "dry_run_mkdirs": {
+      "value": ["--artifacts-dir", "--output-folder"],
+      "source": "cli.py:836-837: the dry run creates both directories"
+    },
+    "outcomes": {
+      "value": ["candidates_found", "no_opportunity", "failed", "cancelled"],
+      "source": "native stop reasons in result.json, plus the runtime's failed/cancelled"
+    }
+  }
+}
