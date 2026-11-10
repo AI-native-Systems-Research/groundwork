@@ -95,17 +95,16 @@ runtime spec in [docs/ains-runtime-spec.md](docs/ains-runtime-spec.md).
 
 ## Install
 
-The skill installs into the repo you want to investigate, not this one.
-From a local checkout:
+The skill installs into the repo you want to investigate, not this one:
 
 ```bash
 cd ~/git/llm-d-router                    # the repo you want to investigate
-npx skills add /path/to/groundwork --skill investigation -a claude-code   # → .claude/skills/investigation/
-npx skills add /path/to/groundwork --skill investigation -g               # → ~/.claude/skills/ (all repos)
+npx skills add AI-native-Systems-Research/groundwork --skill investigation -a claude-code   # → .claude/skills/investigation/
+npx skills add AI-native-Systems-Research/groundwork --skill investigation -g               # → ~/.claude/skills/ (all repos)
 ```
 
-Once the repo is published on GitHub, use `AI-native-Systems-Research/groundwork`
-in place of the local path.
+The repo is private for now, so you need GitHub access to it. To install
+from a local checkout instead, swap in its path (e.g. `/path/to/groundwork`).
 
 Requires Python 3.10+ and PyYAML (`pip install pyyaml`). Each method needs its
 own tools (see the table above). `doctor.py` reports which ones you have, and

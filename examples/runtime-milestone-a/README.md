@@ -17,8 +17,8 @@ refuses a dirty tree; a project install adds untracked `.claude/skills/` or
 `.agents/skills/`):
 
 ```bash
-npx skills add /path/to/groundwork --skill investigation -g              # Claude Code → ~/.claude/skills/
-npx skills add /path/to/groundwork --skill investigation -a codex -g -y  # Codex → ~/.agents/skills/
+npx skills add AI-native-Systems-Research/groundwork --skill investigation -g              # Claude Code → ~/.claude/skills/
+npx skills add AI-native-Systems-Research/groundwork --skill investigation -a codex -g -y  # Codex → ~/.agents/skills/
 ```
 
 Optional: default model ids in `~/.config/investigation/config.yaml`, so the

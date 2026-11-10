@@ -175,7 +175,7 @@ Rules that follow from the spec:
 
 ### Install: `npx skills add`
 
-Once this repo is on GitHub:
+From GitHub:
 
 ```bash
 cd ~/git/llm-d-router
