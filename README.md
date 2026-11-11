@@ -1,5 +1,11 @@
 # groundwork
 
+> [!NOTE]
+> **Experimental.** This is a research prototype we're still shaping, so
+> interfaces and file formats change often and refactors can be large.
+> Pin a commit if you need the same behaviour twice.
+> See [Status](#status) for what's in flux.
+
 [AI-native Systems Research](https://github.com/AI-native-Systems-Research)
 and [inference-sim](https://github.com/inference-sim) have built many tools:
 Nous for controlled experiments, Spotlights for code and telemetry
@@ -11,6 +17,27 @@ It does this through `investigation`, a skill for your coding agent. You ask
 a question. The agent picks the tools that fit, gets your OK before anything
 expensive runs, and writes an answer where **every number points at a file
 that provably contains it**.
+
+## Status
+
+We're still working out what this should be. The ideas below are the settled
+part; the code around them is not. Specifically:
+
+- **Interfaces aren't stable yet.** Script names, flags, and outputs change,
+  as do the skill flow, the `investigations/<slug>/` layout, the answer
+  contract, and the runtime's submit → prepare → approve → launch protocol.
+- **Refactors can be large.** Steps may get merged, split, or dropped as we
+  learn what's actually useful.
+- **No releases or versioning yet.** No semver, no migration notes. `main` is
+  the branch to use, and it moves.
+- **Older investigations may need a re-run.** Results written by an earlier
+  version won't always validate against a later one.
+- **Still early on coverage.** It's been used on a handful of questions across
+  a few repos, so expect rough edges.
+
+Using it now works well if you pin a commit and keep your own copy of results
+you care about. Bug reports and sharp feedback are exactly what's useful at
+this stage.
 
 ## The mission
 
@@ -105,6 +132,9 @@ npx skills add AI-native-Systems-Research/groundwork --skill investigation -g   
 
 The repo is private for now, so you need GitHub access to it. To install
 from a local checkout instead, swap in its path (e.g. `/path/to/groundwork`).
+
+Installing again later can pick up interface changes, so pin a commit if you
+need the same behaviour twice.
 
 Requires Python 3.10+ and PyYAML (`pip install pyyaml`). Each method needs its
 own tools (see the table above). `doctor.py` reports which ones you have, and
