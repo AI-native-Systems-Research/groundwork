@@ -1,5 +1,12 @@
 # groundwork
 
+> [!WARNING]
+> **Very experimental. Expect major changes.** This is an early research
+> prototype, not a product. Everything here — the skill, the scripts, the
+> file layouts, the answer format, the runtime protocol — can change or be
+> rewritten without notice or a migration path. Do not depend on it for
+> anything that matters yet. See [Status](#status-very-experimental).
+
 [AI-native Systems Research](https://github.com/AI-native-Systems-Research)
 and [inference-sim](https://github.com/inference-sim) have built many tools:
 Nous for controlled experiments, Spotlights for code and telemetry
@@ -11,6 +18,28 @@ It does this through `investigation`, a skill for your coding agent. You ask
 a question. The agent picks the tools that fit, gets your OK before anything
 expensive runs, and writes an answer where **every number points at a file
 that provably contains it**.
+
+## Status: very experimental
+
+We are still figuring out what this should be. The ideas below are the stable
+part; the code around them is not. Concretely:
+
+- **No stable interfaces.** Script names, flags, and outputs change. The skill
+  flow, the `investigations/<slug>/` layout, the answer contract, and the
+  runtime's submit → prepare → approve → launch protocol are all still moving.
+- **Expect big refactors.** Whole steps may be merged, split, or dropped. Parts
+  of this may be rewritten from scratch.
+- **No versioning or deprecation promises.** There are no releases yet, no
+  semver, and no migration notes. `main` is the only branch that matters, and
+  it can break you.
+- **Old investigations may stop working.** Results written by an earlier
+  version may not validate or re-run against a later one.
+- **Thin coverage.** It has been exercised on a small number of questions in a
+  few repos. Rough edges and wrong answers are likely.
+
+If you want to use it anyway: pin a commit, keep your own copy of anything you
+care about, and read the answers with a skeptical eye. Bug reports and sharp
+feedback are very welcome — that is what this stage is for.
 
 ## The mission
 
@@ -105,6 +134,9 @@ npx skills add AI-native-Systems-Research/groundwork --skill investigation -g   
 
 The repo is private for now, so you need GitHub access to it. To install
 from a local checkout instead, swap in its path (e.g. `/path/to/groundwork`).
+
+Because this is experimental, installing again later can pull in breaking
+changes. Pin a commit if you need the same behaviour twice.
 
 Requires Python 3.10+ and PyYAML (`pip install pyyaml`). Each method needs its
 own tools (see the table above). `doctor.py` reports which ones you have, and
