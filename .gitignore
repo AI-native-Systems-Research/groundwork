@@ -4,3 +4,6 @@ __pycache__/
 # legacy v1 engine output at the repo root (v2 runs live outside the repo); anchored so tests/fixtures/*/runs/ stay tracked
 /runs/
 *.nous.log
+# coverage data (the .coveragerc config itself is tracked)
+.coverage
+.coverage.*

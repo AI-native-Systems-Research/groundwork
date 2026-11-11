@@ -1,0 +1,25 @@
+; Coverage config shared by CI's `unit` job and scripts/ci-local.sh's job_unit.
+;
+; Most tests exercise the scripts as env-scrubbed subprocesses rather than
+; importing them, so the parent-process-only default under-reports badly:
+; without the patches below the suite measures 68%, with them 81%. Files like
+; collect_telemetry.py and new_study.py are only ever run as subprocesses and
+; read 0% unless their children are traced.
+[run]
+source = skills/investigation/scripts
+parallel = True
+; subprocess: write a data file for each child that inherits COVERAGE_PROCESS_START.
+; _exit: flush data when a child ends via os._exit() instead of a normal return.
+patch =
+    subprocess
+    _exit
+
+[report]
+; Current level is 81% over skills/investigation/scripts, so this floor sits ~1
+; point below it. That narrow margin is what makes a total-only gate enough to
+; catch the regression this guards against: any file of ~100+ statements
+; dropping to 0% pushes the total under 80 and fails the build. Raise the floor
+; as coverage grows, and keep the margin thin, or add per-file --include floors.
+fail_under = 80
+exclude_also =
+    if __name__ == .__main__.:

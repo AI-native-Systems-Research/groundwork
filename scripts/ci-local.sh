@@ -14,7 +14,21 @@ JOBS=("$@")
 job_unit() {
   "$PY" -c 'import sys; assert sys.version_info >= (3, 10), sys.version' || return 1
   "$PY" -c 'import yaml' || { echo "PyYAML missing: $PY -m pip install pyyaml"; return 1; }
-  (cd "$REPO" && "$PY" -m unittest discover tests)
+  # CI gates on coverage (.coveragerc). Mirror that when coverage is installed;
+  # fall back to a bare run so the job still works without it.
+  if ! "$PY" -c 'import coverage' 2>/dev/null; then
+    echo "coverage missing ($PY -m pip install coverage): running without the coverage gate"
+    (cd "$REPO" && "$PY" -m unittest discover tests)
+    return $?
+  fi
+  (
+    cd "$REPO" || exit 1
+    export COVERAGE_PROCESS_START="$REPO/.coveragerc"
+    "$PY" -m coverage erase
+    "$PY" -m coverage run -m unittest discover tests || exit 1
+    "$PY" -m coverage combine || exit 1
+    "$PY" -m coverage report
+  )
 }
 
 job_spec() {
