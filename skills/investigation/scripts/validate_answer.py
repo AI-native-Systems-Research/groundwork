@@ -12,13 +12,15 @@ The iron rule — the load-bearing check — is that every claim's evidence
 file must exist AND must actually contain the claimed value. String
 values match as a substring of the raw text, plus (when the file parses
 as JSON) as an exact scalar anywhere in the structure. Numeric values
-match any printed spelling as a substring (repr, padded and trimmed
-fixed decimals — the way Python scripts print numbers), plus a recursive
-scan of all numeric scalars in JSON files comparing with
-math.isclose(rel_tol=1e-3, abs_tol=1e-9) — Nous v2's check_evidence_item
-tolerances, so a claim that passes here passes Nous's own check; an int
-in the file satisfies a float claim and vice versa. Files over 50 MB are
-scanned line by line, never loaded whole.
+match any printed spelling (repr, padded and trimmed fixed decimals —
+the way Python scripts print numbers) as a standalone number — no
+digit, '.' or '-' may touch the match, so a date like 2026-11-10
+satisfies no claim of 10, 11 or 2026 — plus a recursive scan of all
+numeric scalars in JSON files comparing with math.isclose(rel_tol=1e-3,
+abs_tol=1e-9) — Nous v2's check_evidence_item tolerances, so a claim
+that passes here passes Nous's own check; an int in the file satisfies
+a float claim and vice versa. Files over 50 MB are scanned line by
+line, never loaded whole.
 
 Usage: python3 scripts/validate_answer.py <answer.json> [--root DIR]
        [--check-citations [--repo NAME=PATH ...]]
@@ -107,12 +109,35 @@ def scalar_matches(scalar, value) -> bool:
             and math.isclose(value, scalar, rel_tol=REL_TOL, abs_tol=ABS_TOL))
 
 
+def standalone_number_in(text: str, forms) -> bool:
+    """True when one of `forms` (numeric spellings, from numeric_forms)
+    appears in `text` as a standalone number: no digit, '.' or '-' may
+    touch the match, except that a '.' AFTER it is allowed when no digit
+    follows — a sentence-ending period ('settled at 4100.') is not a
+    decimal fraction. Without the anchor, a fabricated claim hides inside
+    the ambient numeric noise of any log — dates ('2026-11-10' satisfies
+    claims of 10, 11 and 2026), pids, ports and sha fragments. The hyphen
+    belongs in the anchor classes exactly because of dates and ranges.
+    Unit suffixes still match ('p99=10ms', 'took 10s'), and a negative
+    spelling matches its whole form ('-5' in 'delta: -5') because the
+    lookbehind sees the character before the minus. One deliberate
+    tightening: a range endpoint ('values 0-100') no longer satisfies a
+    claim of 100 — the evidence must contain the measured value, not an
+    interval it falls inside."""
+    if not forms:
+        return False  # unreachable via text_contains; guards direct callers
+    alts = "|".join(re.escape(f)
+                    for f in sorted(forms, key=len, reverse=True))
+    return re.search(rf"(?<![0-9.-])(?:{alts})(?![0-9-]|\.\d)", text) is not None
+
+
 def text_contains(text: str, value) -> bool:
     """Substring check in raw text: the value itself for strings, every
-    printed spelling for numbers."""
+    printed spelling for numbers — anchored, via standalone_number_in,
+    so a number only matches as a standalone number."""
     if isinstance(value, str):
         return value in text
-    return any(form in text for form in numeric_forms(value))
+    return standalone_number_in(text, numeric_forms(value))
 
 
 def json_contains(doc, value) -> bool:
@@ -133,7 +158,8 @@ def json_contains(doc, value) -> bool:
 def file_contains(path: Path, value):
     """The iron rule for one evidence file: does it contain `value`?
     Returns (found, error). Files over LARGE_FILE_BYTES are scanned line by
-    line (substring spellings only) and never loaded whole."""
+    line (spellings only, but anchored the same way) and never loaded
+    whole."""
     try:
         size = path.stat().st_size
     except OSError as e:
@@ -142,7 +168,10 @@ def file_contains(path: Path, value):
     if size > LARGE_FILE_BYTES:
         try:
             with path.open("r", errors="replace") as fh:
-                if any(form in line for line in fh for form in forms):
+                if isinstance(value, str):
+                    if any(form in line for line in fh for form in forms):
+                        return True, None
+                elif any(standalone_number_in(line, forms) for line in fh):
                     return True, None
         except OSError as e:
             return False, str(e)
