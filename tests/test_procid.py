@@ -371,6 +371,29 @@ class FindByArgv(ProcIdTest):
             self.assertEqual(procid.find_by_argv([]), [])
             self.assertEqual(procid.find_by_argv(None), [])
 
+    # Issue #23: a process whose argv contains an embedded newline makes `ps`
+    # print a continuation line whose first token is not a pid. process_table()'s
+    # ps path skips those lines (int() guarded by except ValueError);
+    # find_by_argv's does not, so one malformed line makes find_by_argv raise
+    # ValueError out of recovery.evidence() (which catches only ProcIdError)
+    # into reconcile()/status()/cancel()/mark_not_launched() — exactly the
+    # recovery flow the module exists to keep honest. Pinned as an expected
+    # failure: it flips to "unexpected success" (a failing run) the moment
+    # the guard lands, then it asserts the fixed behaviour.
+    @unittest.expectedFailure
+    def test_ps_path_skips_non_numeric_first_tokens(self):
+        # Three tokens with a matching command column: this line reaches the
+        # unguarded int(t[0]) today (a one-token continuation is already
+        # skipped by the len(t) == 3 check, so it cannot pin the defect).
+        continuation = "line2 S /usr/bin/python3 /x/eng.py run c.yaml --run-id r1"
+        text = f"  200 S /usr/bin/python3 /x/eng.py run c.yaml --run-id r1\n{continuation}\n"
+        argv = ["/usr/bin/python3", "/x/eng.py", "run", "c.yaml", "--run-id", "r1"]
+        with PsPath("/fake/ps"), \
+                mock.patch.object(procid, "_run_ps", return_value=text):
+            # Once the guard exists, a junk line is skipped, not fatal —
+            # the same contract process_table()'s ps path already keeps.
+            self.assertEqual(procid.find_by_argv(argv), [200])
+
     @unittest.skipUnless(HAVE_PROC, "needs /proc")
     def test_proc_path_finds_and_excludes_self_and_the_dead(self):
         argv = [sys.executable, "-c", "import time; time.sleep(30)  # procid-marker"]
