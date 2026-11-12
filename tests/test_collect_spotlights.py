@@ -21,6 +21,9 @@ SCRIPT = SCRIPTS / "collect_spotlights.py"
 VALIDATOR = SCRIPTS / "validate_answer.py"
 RUN = Path(__file__).resolve().parent / "fixtures" / "spotlights" / "run-a"
 
+sys.path.insert(0, str(SCRIPTS))
+import collect_spotlights as cs  # noqa: E402
+
 CONSTANTS = "# toy constants\n\nBLOCK_SIZE = 16\nMAX_BLOCKS = 4096\n# 18%\n"
 POLICY = ("class LRUPolicy:\n    \"\"\"Toy policy.\"\"\"\n\n"
           "    def evict(self, n):\n        out = []\n        for k in list(self.order):\n"
@@ -79,6 +82,89 @@ class SpotlightsCollectTest(unittest.TestCase):
         col = json.loads((self.study / "collection.json").read_text())
         self.assertEqual(col["collection_version"], 2)
         return col["spotlights"]
+
+    def test_estimate_guard_blocks_every_numeric_spelling(self):
+        """An estimate never becomes a claim value in ANY spelling: the guard
+        set must carry the trimmed, padded, leading-dot and exponent forms of
+        every numeric estimate, or a quoted source line spelled differently
+        ('0.50' for the estimate 0.5) is picked as a claim value and passes
+        all three guard layers."""
+        spellings = {
+            0.5: ["0.5", ".5", ".50", "0.50", "0.500", "5e-1", "5E-1", "5e-01",
+                  "0.5e0", "0.5E0", "0.5e+0", "5.0e-1"],
+            5.0: ["5", "5.0", "5.00", "5e0", "5E0", "5.0e0", "5e+0", "0.5e1"],
+            10.0: ["10", "10.0", "1e1", "1.0e1", "1e+1", "1E1", "1e+01"],
+            2.861085: ["2.861085", "2.861085e0", "0.2861085e1"],
+        }
+        unequal = {
+            0.5: ["0.51", "0.49999", "2.5e-1", "0.499999", "0,5"],
+            5.0: ["5.1", "4.999"],
+            10.0: ["10.1", "1e2"],
+            2.861085: ["2.8", "2.86", "2.861", "2.87"],
+        }
+        for value, forms in spellings.items():
+            with self.subTest(estimate=value):
+                forbidden = cs.estimate_values(
+                    {"candidates": [{"estimated_impact": value}]}, None, None)
+                for form in forms:
+                    self.assertIn(form, forbidden, form)
+                # unequal values stay pickable — the guard never over-blocks
+                for near in unequal[value]:
+                    self.assertNotIn(near, forbidden, near)
+                # every emitted spelling parses back to exactly the estimate
+                for form in forbidden:
+                    self.assertEqual(float(form), float(value), form)
+        # non-numeric estimates keep their exact-string shape only
+        self.assertEqual(cs.estimate_values(
+            {"candidates": [{"estimated_impact": "high"}]}, None, None), {"high"})
+
+    def test_estimate_in_alternate_spelling_is_not_picked_as_a_value(self):
+        """End to end through pick_value: a candidate whose span's first
+        non-blank line is '0.50' against estimated_impact 0.5 must give a
+        note and NO claim (at main the alternate spelling was drafted).
+        The cited content must be written at the CITED sha, so this test
+        rewrites the worktree file and amends a fresh commit on top."""
+        result = json.loads((self.run_dir / "result.json").read_text())
+        cand = result["report"]["candidates"][0]  # cand-toy_cache-0001
+        cand["estimated_impact"] = 0.5
+        (self.run_dir / "result.json").write_text(json.dumps(result))
+        mp = self.run_dir / "run_manifest.json"
+        m = json.loads(mp.read_text())
+
+        def cite_sha(content):
+            (self.target / "toy/cache/constants.py").write_text(content)
+            git(self.target, "commit", "-qam", "c-quote")
+            sha = git(self.target, "rev-parse", "HEAD")
+            m["target"]["commit_sha"] = sha
+            mp.write_text(json.dumps(m, indent=2))
+
+        # the cited span is constants.py L3-L5: make every line of the span
+        # the alternate spelling so pick_value has nothing else to pick
+        cite_sha("x\nx\n0.50\n0.50\n0.50\n")
+        r = self.run_collect()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sec = self.section()
+        drafted = [c for c in sec["claims_draft"]
+                   if c["candidate_id"] == "cand-toy_cache-0001"]
+        self.assertEqual(drafted, [])
+        self.assertTrue(any("cand-toy_cache-0001" in n and "no usable line" in n
+                            for n in sec["notes"]))
+        # the control: the canonical spelling '0.5' is equally blocked
+        cite_sha("x\nx\n0.5\n0.5\n0.5\n")
+        r = self.run_collect()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sec = self.section()
+        drafted = [c for c in sec["claims_draft"]
+                   if c["candidate_id"] == "cand-toy_cache-0001"]
+        self.assertEqual(drafted, [])
+        # an UNEQUAL value on the same lines stays pickable
+        cite_sha("x\nx\n0.51\n0.51\n0.51\n")
+        r = self.run_collect()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sec = self.section()
+        drafted = [c for c in sec["claims_draft"]
+                   if c["candidate_id"] == "cand-toy_cache-0001"]
+        self.assertEqual([c["value"] for c in drafted], ["0.51"])
 
     def test_copies_and_citations(self):
         r = self.run_collect()

@@ -122,6 +122,76 @@ def ranked_ids(candidates: list, sorted_json, sorted_md_text) -> tuple[list, str
     return out, source
 
 
+MAX_FIXED_PRECISION = 12          # widest "%.Nf" spelling tried (as validate_answer)
+
+
+def numeric_spellings(v) -> set:
+    """Every spelling of a numeric estimate a quoted source line could carry:
+    str/json.dumps/repr plus the trimmed integral form ("5" for 5.0), exact
+    fixed-decimal renderings ("0.50".."0.500000000000", and their
+    leading-zero-trimmed ".50" variants), and the exponent spellings
+    ("5e-1", "5E-1", "5e-01", "0.5e0", "5.0e-1", ...). Mirrors
+    validate_answer.numeric_forms' shape (kept local rather than imported so
+    this collector never loads the answer validator) and extends it to
+    exponent forms, because pick_value returns whole stripped lines: a bare
+    numeric literal early in a quoted span becomes the claim value whatever
+    spelling it uses. A form qualifies only when float(form) == value, so a
+    rounded or approximate form is never emitted and can never over-block."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return set()
+    f = float(v)
+    out = {json.dumps(v), str(v), repr(f)}
+    s = repr(f)
+    trimmed = s.rstrip("0").rstrip(".")  # 5.0 -> "5" ("." guards the int part)
+    if "." in s and "e" not in s and "E" not in s and trimmed:
+        out.add(trimmed)
+        out.add(trimmed.lstrip("0") if trimmed.startswith("0") else trimmed)  # 0.5 -> ".5"
+    for prec in range(1, MAX_FIXED_PRECISION + 1):
+        t = f"{f:.{prec}f}"  # exact only — a rounded form would over-block
+        if float(t) == f:
+            out.add(t)
+            if t.startswith("0."):
+                out.add(t[1:])  # "0.50" -> ".50"
+    # exponent spellings: the canonical scientific form read off "{f:e}" and
+    # its one-digit point shifts, signed and unsigned exponents, 2- and
+    # 3-digit zero padding, e/E, with and without the fractional mantissa
+    # ("5e-1", "5.0e-1", "0.5e0", "1e+01")
+    sci = f"{f:e}"            # e.g. "5.000000e-01"
+    mant, _, exp = sci.partition("e")
+    exp_i = int(exp)
+    # one-digit decimal-point shifts of the mantissa, so "0.5e0" (mantissa
+    # 0.5, exponent 0) is covered for the canonical "5e-1": the significant
+    # digits move across the point and the exponent compensates the other
+    # way (0.5e0 == 5e-1), so both exponent values are emitted, each bare,
+    # explicitly signed, and zero-padded to 2 and 3 digits.
+    exps = set()
+    for e in (exp_i, exp_i + 1):
+        exps.update({str(e), f"{e:+d}",
+                     f"{'-' if e < 0 else '+'}{abs(e):02d}",
+                     f"{'-' if e < 0 else '+'}{abs(e):03d}"})
+    sig = mant.rstrip("0").rstrip(".") or "0"    # "5.000000" -> "5"
+    digits = sig.replace(".", "")
+    mants = {mant, sig, digits}
+    mants.add(f"0.{digits}")                     # "5" -> "0.5" (exponent +1)
+    if len(digits) > 1:
+        mants.add(f"{digits[0]}.{digits[1:]}")   # "2861085" -> "2.861085"
+    mants.add(f"{digits}.0")                     # "5" -> "5.0", "1" -> "1.0"
+    for e in exps:
+        for m in mants:
+            for sep in ("e", "E"):
+                out.add(f"{m}{sep}{e}")
+    return {t for t in out if _parses_exactly(t, f)}
+
+
+def _parses_exactly(text: str, f: float) -> bool:
+    """float(text) == f, tolerating the leading-dot (".5") spelling Python's
+    float() already accepts; anything else (nan, inf, overflow) is dropped."""
+    try:
+        return float(text) == f
+    except ValueError:
+        return False
+
+
 def estimate_values(report: dict, sorted_json, manifest) -> set:
     """Every Spotlights estimate in the run; none may be a claim value."""
     vals = set()
@@ -130,8 +200,7 @@ def estimate_values(report: dict, sorted_json, manifest) -> set:
         if v is None or isinstance(v, bool):
             return
         if isinstance(v, (int, float)):
-            vals.add(json.dumps(v))
-            vals.add(str(v))
+            vals.update(numeric_spellings(v))
         elif isinstance(v, str) and v.strip():
             vals.add(v.strip())
 

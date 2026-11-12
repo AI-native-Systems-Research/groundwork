@@ -268,10 +268,100 @@ class HelperTests(unittest.TestCase):
         errors = ["claim C1: evidence path does not exist: x.json",
                   "evidence value mismatch at y.json#/hit_rate: expected 0.7, got 0.78"]
         self.assertFalse(collect.claim_verified({"id": "C1", "metric": "p99_ms"}, errors))
+        # the value-mismatch family carries a <path>#<key> pointer, no claim
+        # id: it taints the claim whose metric is the pointer's key
         self.assertFalse(collect.claim_verified({"id": "C9", "metric": "hit_rate"}, errors))
         self.assertTrue(collect.claim_verified({"id": "C2", "metric": "other"}, errors))
         self.assertTrue(collect.claim_verified({"id": "C1", "metric": "p99_ms"}, []))
         self.assertTrue(collect.claim_verified({"id": "", "metric": ""}, errors))
+
+    def test_claim_verified_id_contamination(self):
+        """'C1' is a substring of 'C12': an error naming C12 must not taint
+        C1 (word-boundary id match)."""
+        errors = ["claim C12: evidence path does not exist: "
+                  "nous_evidence/runs/iter-1/results/R12.json (searched work dir)"]
+        self.assertTrue(collect.claim_verified({"id": "C1", "metric": "p99_ms"}, errors))
+        self.assertFalse(collect.claim_verified({"id": "C12", "metric": "p99_ms"}, errors))
+        # same direction for a longer shared prefix: C1N names neither C1 nor C11
+        errors = ["claim C1N: evidence path does not exist: x.json"]
+        self.assertTrue(collect.claim_verified({"id": "C1", "metric": "m"}, errors))
+        self.assertTrue(collect.claim_verified({"id": "C11", "metric": "m"}, errors))
+        # an id-shaped mention without the 'claim' prefix still taints, bounded
+        self.assertFalse(collect.claim_verified(
+            {"id": "C3", "metric": "m"}, ["claims_needed id C3 missing"]))
+
+    def test_claim_verified_metric_contamination(self):
+        """A shared metric name is the NORM (treatment vs baseline): an error
+        pinning r9.json#/p99_ms taints only the claim citing r9.json, never
+        the sibling sharing the metric but citing r5.json."""
+        errors = ["evidence value mismatch at nous_evidence/r9.json#/p99_ms: "
+                  "expected 43.0, got 43.2"]
+        c5 = {"id": "C5", "metric": "p99_ms", "evidence": "nous_evidence/r5.json"}
+        c9 = {"id": "C9", "metric": "p99_ms", "evidence": "nous_evidence/r9.json"}
+        self.assertTrue(collect.claim_verified(c5, errors))
+        self.assertFalse(collect.claim_verified(c9, errors))
+        # with evidence_detail {path,key} both must match: same file, other
+        # key -> clean
+        sibling = {"id": "C10", "metric": "hit_rate",
+                   "evidence": "nous_evidence/r9.json",
+                   "evidence_detail": {"path": "nous_evidence/r9.json",
+                                       "key": "/hit_rate", "value": 0.7}}
+        self.assertTrue(collect.claim_verified(sibling, errors))
+        # the detail citing the SAME file+key is tainted
+        same = {"id": "C11", "metric": "p95",
+                "evidence": "nous_evidence/r9.json",
+                "evidence_detail": {"path": "nous_evidence/r9.json",
+                                    "key": "/p99_ms", "value": 43.2}}
+        self.assertFalse(collect.claim_verified(same, errors))
+
+    def test_claim_verified_error_without_id_or_metric(self):
+        """The value-mismatch family can name the claim's evidence without its
+        id or metric string: the pointer or the file must carry the taint."""
+        errors = ["evidence value mismatch at results/R4.json#/latency: "
+                  "expected 41.0, got 41.8"]
+        # pointer key == the claim's metric (json-pointer key, no leading
+        # slash equivalence) -> tainted even though the id never appears
+        self.assertFalse(collect.claim_verified(
+            {"id": "latency_claim_7", "metric": "latency"}, errors))
+        # the claim's own {path,key} evidence names the pointer exactly
+        self.assertFalse(collect.claim_verified(
+            {"id": "latency_claim_7", "metric": "p95_latency_ms",
+             "evidence": {"path": "results/R4.json", "key": "/latency"}}, errors))
+        # evidence_detail naming the pointer exactly
+        self.assertFalse(collect.claim_verified(
+            {"id": "latency_claim_7", "metric": "p95_latency_ms",
+             "evidence": "results/R4.json",
+             "evidence_detail": {"path": "results/R4.json",
+                                 "key": "/latency", "value": 41.0}}, errors))
+        # a different claim citing a different file is untouched
+        self.assertTrue(collect.claim_verified(
+            {"id": "x", "metric": "p95_latency_ms",
+             "evidence": "results/R9.json"}, errors))
+        # id-less path-does-not-exist error: the file name carries the taint
+        errors = ["evidence path does not exist: "
+                  "nous_evidence/runs/iter-1/results/R1.json (searched work dir)"]
+        self.assertFalse(collect.claim_verified(
+            {"id": "latency_claim_7", "metric": "p95_latency_ms",
+             "evidence": "nous_evidence/runs/iter-1/results/R1.json"}, errors))
+        self.assertTrue(collect.claim_verified(
+            {"id": "x", "metric": "p95_latency_ms",
+             "evidence": "nous_evidence/runs/iter-1/results/R2.json"}, errors))
+
+    def test_claim_verified_unattributable_error_taints_all(self):
+        """An error that names no id, pointer or file blames everyone: a
+        silent verified:true is the failure mode the guard exists to stop."""
+        errors = ["the evidence could not be checked at all"]
+        self.assertFalse(collect.claim_verified({"id": "C7", "metric": "m"}, errors))
+        self.assertFalse(collect.claim_verified({"id": "", "metric": ""}, errors))
+
+    def test_claim_verified_whole_answer_verdicts_taint_no_one(self):
+        """The README's whole-answer error families blame the answer's shape,
+        not any one claim."""
+        errors = ["claims_needed ids may be added, not removed",
+                  "repro must not start with cd",
+                  "run 'R1': wait_for 'R1' must be a file path or cmd:<command>",
+                  "|effect| 0.8 <= 2 * noise_sd 0.75"]
+        self.assertTrue(collect.claim_verified({"id": "C7", "metric": "m"}, errors))
 
     def test_draft_claims(self):
         wd = Path("/abs/work")
