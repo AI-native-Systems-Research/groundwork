@@ -53,7 +53,9 @@ class Base(unittest.TestCase):
         self.addCleanup(restore)
         self.env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                     "HOME": str(self.tmp), "UNRELATED_VAR": "do-not-pass",
-                    "CLAUDE_CODE_ENTRYPOINT": "cli", "FAKE_API_TOKEN": SECRET}
+                    "CLAUDE_CODE_ENTRYPOINT": "cli", "FAKE_API_TOKEN": SECRET,
+                    **{k: v for k, v in os.environ.items()
+                     if k.startswith("COVERAGE_")}}
         self.n = 0
 
     def _cleanup(self):
