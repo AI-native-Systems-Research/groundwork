@@ -58,8 +58,9 @@ def help_flags(binary: Path) -> set[str] | None:
     return set(re.findall(r"(?m)^\s+(?:-\w, )?(--[a-z0-9][a-z0-9-]*)", r.stdout + r.stderr))
 
 
-def check_engines(report: dict) -> None:
-    machine = _config.load_machine_config()
+def check_engines(report: dict, machine: dict | None = None) -> None:
+    if machine is None:
+        machine = _config.load_machine_config()
     pins = doctor.read_pins()
     for name, engine in (("nous", "nous"), ("spotlights", "spotlights-engine")):
         e = doctor.engine_info(engine, machine, pins, True, {})
@@ -73,8 +74,10 @@ def check_engines(report: dict) -> None:
             report["ok"].append(f"{name}: installed sha equals the lock ({want[:12]})")
 
 
-def check_blis(report: dict) -> None:
-    root = _config.load_machine_config().get("blis_apparatus_root")
+def check_blis(report: dict, machine: dict | None = None) -> None:
+    if machine is None:
+        machine = _config.load_machine_config()
+    root = machine.get("blis_apparatus_root")
     blis = U.entry("blis")
     if not root:
         report["warnings"].append("blis: no blis_apparatus_root in the machine config; "
@@ -122,11 +125,21 @@ def check_notes(report: dict) -> None:
             report["notes"].append(f"blis knob {k['label']!r}: {k['verify_note']}")
 
 
+class WriteDocsError(Exception):
+    """method-plan.md lost the generated-table anchor write_docs needs."""
+
+
 def write_docs() -> bool:
     text = METHOD_PLAN.read_text(encoding="utf-8")
-    s = text.index(TABLE_MARK)
-    s = text.index("\n", s) + 1
-    e = text.index("\n\n", s)
+    try:
+        s = text.index(TABLE_MARK)
+        s = text.index("\n", s) + 1
+        e = text.index("\n\n", s)
+    except ValueError as e:
+        raise WriteDocsError(
+            f"{METHOD_PLAN.name}: cannot find the generated-table anchor ({e}); "
+            f"restore the '{TABLE_MARK}' mark with its table followed by a blank "
+            "line, or add the table by hand") from e
     new = text[:s] + U.representability_table_md().rstrip("\n") + text[e:]
     if new != text:
         METHOD_PLAN.write_text(new, encoding="utf-8")
@@ -147,12 +160,24 @@ def main(argv: list[str] | None = None) -> int:
             U.facts(name)
         except U.UpstreamError as e:
             report["failures"].append(str(e))
+    machine: dict | None = None
     if not report["failures"]:
-        check_engines(report)
-        check_blis(report)
-        check_notes(report)
+        # Load the machine config once for both machine checks, the way
+        # doctor.config_info does: a malformed file is a reported condition,
+        # not a traceback (doctor prints it as UNPARSEABLE and still exits 0).
+        try:
+            machine = _config.load_machine_config()
+        except _config.ConfigError as e:
+            report["failures"].append(f"machine config: {e}")
+        else:
+            check_engines(report, machine)
+            check_blis(report, machine)
+            check_notes(report)
     if a.write_docs:
-        report["docs_written"] = write_docs()
+        try:
+            report["docs_written"] = write_docs()
+        except WriteDocsError as e:
+            report["failures"].append(str(e))
     if a.json:
         print(json.dumps(report, indent=2))
     else:

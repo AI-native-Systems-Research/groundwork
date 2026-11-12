@@ -268,7 +268,11 @@ def installed_info(exe: str, dist: str | None) -> dict:
     hits = sorted(venv.glob(f"lib/python*/site-packages/{dist}-*.dist-info"))
     if not hits:
         return info
-    di = hits[-1]
+    # Pick by version, not by path: 'fakedist-1.10.0.dist-info' sorts before
+    # 'fakedist-1.9.0.dist-info' lexicographically ('1' < '9'), so the plain
+    # last hit would report the OLDER install. version_key (the comparator
+    # latest_release uses for tags) reads the digits from the name.
+    di = max(hits, key=lambda p: version_key(p.name))
     try:
         for line in (di / "METADATA").read_text(encoding="utf-8").splitlines():
             if line.startswith("Version:"):

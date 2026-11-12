@@ -145,6 +145,22 @@ class InstalledInfo(unittest.TestCase):
         info = doctor.installed_info(str(self.exe), "fakedist")
         self.assertEqual(info["version"], "2.0.0")
 
+    def test_highest_dist_info_version_wins_numerically(self):
+        # 'fakedist-1.9.0.dist-info' sorts AFTER 'fakedist-1.10.0.dist-info'
+        # lexicographically ('9' > '1'), so the pre-fix last-hit pick reported
+        # the OLDER install. Distinct commit ids make the wrong pick visible
+        # in the sha and requested_revision too, not just the version.
+        self.dist_info("1.9.0", {"url": "https://github.com/org/repo.git",
+                                 "vcs_info": {"commit_id": "a" * 40,
+                                              "requested_revision": "v1.9.0"}})
+        self.dist_info("1.10.0", {"url": "https://github.com/org/repo.git",
+                                  "vcs_info": {"commit_id": "b" * 40,
+                                               "requested_revision": "v1.10.0"}})
+        info = doctor.installed_info(str(self.exe), "fakedist")
+        self.assertEqual(info["version"], "1.10.0")
+        self.assertEqual(info["ref"], "v1.10.0")
+        self.assertEqual(info["sha"], "b" * 40)
+
     def test_editable_file_url_reads_the_checkout(self):
         head = make_repo(self.tmp / "repo")
         self.dist_info("3.0.0", {"url": f"file://{self.tmp / 'repo'}",
