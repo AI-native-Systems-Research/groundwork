@@ -243,6 +243,43 @@ class WriteDocs(unittest.TestCase):
         self.assertIn("\n\nafter", text)  # the trailing blank line is kept
         self.assertNotIn("OLD TABLE", text)
 
+    def run_main(self, *argv):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = V.main(list(argv))
+        return rc, buf.getvalue()
+
+    def test_missing_mark_is_an_explanatory_error_not_a_traceback(self):
+        # The mark was removed or hand-edited away (real at --write-docs time:
+        # step 6 of the bump procedure runs right after editing nearby docs).
+        # At main write_docs raises a bare ValueError out of main().
+        self.plan.write_text("before\nno generated mark here\n\nafter\n")
+        before = self.plan.read_bytes()
+        with mock.patch.object(V, "METHOD_PLAN", self.plan), \
+             mock.patch.object(U, "representability_table_md", return_value="NEW"):
+            rc, out = self.run_main("--write-docs", "--json")
+        self.assertEqual(rc, 1)
+        j = json.loads(out)
+        self.assertEqual(len(j["failures"]), 1)
+        self.assertIn("method-plan.md", j["failures"][0])
+        self.assertIn("generated-table anchor", j["failures"][0])
+        self.assertEqual(self.plan.read_bytes(), before)  # the plan is untouched
+
+    def test_missing_trailing_blank_line_is_an_explanatory_error(self):
+        # The generated table is the last content, so the "\n\n" terminator
+        # doesn't exist. Also a reported failure, not a ValueError traceback.
+        self.plan.write_text("before\n<!-- generated from references/upstreams/"
+                             "blis.json -->\nOLD TABLE\n")
+        before = self.plan.read_bytes()
+        with mock.patch.object(V, "METHOD_PLAN", self.plan), \
+             mock.patch.object(U, "representability_table_md", return_value="NEW"):
+            rc, out = self.run_main("--write-docs")
+        self.assertEqual(rc, 1)
+        self.assertIn("FAILURES  method-plan.md:", out)
+        self.assertIn("generated-table anchor", out)
+        self.assertNotIn("Traceback", out)
+        self.assertEqual(self.plan.read_bytes(), before)
+
 
 @unittest.skipUnless(HAVE_YAML, "PyYAML not installed")
 class Main(unittest.TestCase):
@@ -279,7 +316,7 @@ class Main(unittest.TestCase):
 
     def test_failures_exit_one(self):
         with mock.patch.object(V, "check_engines",
-                               lambda rep: rep["failures"].append("x")):
+                               lambda rep, machine=None: rep["failures"].append("x")):
             rc, _ = self.run_main()
         self.assertEqual(rc, 1)
 
@@ -288,8 +325,8 @@ class Main(unittest.TestCase):
         def raise_stale(name):
             raise U.UpstreamError("stale: re-verify")
         patches = [mock.patch.object(U, "facts", raise_stale),
-                   mock.patch.object(V, "check_engines", lambda r: calls.append(1)),
-                   mock.patch.object(V, "check_blis", lambda r: calls.append(1)),
+                   mock.patch.object(V, "check_engines", lambda r, m=None: calls.append(1)),
+                   mock.patch.object(V, "check_blis", lambda r, m=None: calls.append(1)),
                    mock.patch.object(V, "check_notes", lambda r: calls.append(1))]
         for p in patches:
             p.start()
@@ -308,6 +345,40 @@ class Main(unittest.TestCase):
             rc, out = self.run_main("--write-docs", "--json")
         self.assertEqual(rc, 0)
         self.assertTrue(json.loads(out)["docs_written"])
+
+    def write_config(self, text: str) -> Path:
+        p = Path(self._cfg.name) / "config.yaml"
+        p.write_text(text)
+        return p
+
+    def test_malformed_machine_config_is_a_reported_failure_not_a_crash(self):
+        # doctor.py's own convention: a broken user config is a reportable
+        # condition, not a traceback. At main this raises ConfigError out of
+        # check_engines and --json prints nothing at all.
+        path = self.write_config("- just\n- a list\n")
+        rc, out = self.run_main("--json")
+        self.assertEqual(rc, 1)
+        j = json.loads(out)
+        self.assertEqual(len(j["failures"]), 1)
+        self.assertIn("machine config", j["failures"][0])
+        self.assertIn(str(path), j["failures"][0])
+        self.assertIn("top level must be a mapping", j["failures"][0])
+
+    def test_malformed_machine_config_text_mode_names_the_file(self):
+        path = self.write_config("- just\n- a list\n")
+        rc, out = self.run_main()
+        self.assertEqual(rc, 1)
+        self.assertIn("FAILURES  machine config:", out)
+        self.assertIn(str(path), out)
+        self.assertNotIn("Traceback", out)
+
+    def test_unparseable_yaml_is_also_a_reported_failure(self):
+        # Bad YAML syntax raises the same ConfigError from _config.load_yaml,
+        # so the single except in main() covers both malformed shapes.
+        self.write_config("foo: [unclosed\n")
+        rc, out = self.run_main("--json")
+        self.assertEqual(rc, 1)
+        self.assertTrue(json.loads(out)["failures"])
 
 
 if __name__ == "__main__":
