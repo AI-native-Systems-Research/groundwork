@@ -218,6 +218,47 @@ class TestCaptureUrl(Base):
         self.assertEqual(r.returncode, 2)
         self.assertNotIn("pw@", r.stderr)
 
+    def test_plain_http_non_loopback_rejected(self):
+        # The gate is unconditional (token present or not) and fires before any
+        # query, so nothing is written to the study.
+        for host in ("prom.example.com", "10.0.0.5"):
+            env = {**self.env, "PROM_TOKEN": TOKEN}
+            r = self.run_cli("--url", f"http://{host}:9090", "--token-env", "PROM_TOKEN",
+                             env=env)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("plain http to non-loopback host", r.stderr)
+            self.assertIn("--allow-insecure-http", r.stderr)
+            self.assertNotIn(TOKEN, r.stderr)
+            self.assertFalse(self.cap_dir().exists())
+
+    def test_plain_http_non_loopback_allowed_with_flag(self):
+        # --allow-insecure-http acknowledges the cleartext hop: the URL is
+        # accepted and the (unreachable) remote fails as a normal query error,
+        # never as the cleartext refusal.
+        env = {**self.env, "PROM_TOKEN": TOKEN}
+        r = self.run_cli("--url", "http://10.0.0.5:9090", "--allow-insecure-http",
+                         "--token-env", "PROM_TOKEN", env=env)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertNotIn("cleartext", r.stderr)
+        self.assertNotIn("non-loopback", r.stderr)
+        self.assertIn("all 2 queries failed", r.stderr)
+        self.assertFalse(self.cap_dir().exists())
+
+    def test_plain_http_loopback_and_https_still_allowed(self):
+        # Loopback plain http (the stub server's own shape) and https to any
+        # host never trip the gate.
+        with FakeProm() as p:
+            r = self.run_cli("--url", p.url)          # http://127.0.0.1:<port>
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # https to a real host is never a cleartext refusal; whatever happens
+        # on the network, the only exit-2 here would be the gate.
+        r = self.run_cli("--url", "https://prom.example.com:9090", cid="c2")
+        self.assertNotEqual(r.returncode, 2)
+        self.assertNotIn("cleartext", r.stderr)
+        self.assertTrue(capture_prom.is_loopback("localhost"))
+        self.assertTrue(capture_prom.is_loopback("127.1.2.3"))
+        self.assertFalse(capture_prom.is_loopback("10.0.0.5"))
+
 
 class TestStep(Base):
     def test_step_limit_errors_with_suggestion(self):
