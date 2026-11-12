@@ -1,12 +1,16 @@
 # Hand-scoring checklist
 
-This checklist is filled in by the owner (Kelly) at the end of every study.
-Copy this file into the study as `investigations/<slug>/hand-score.md` and score each
-item **0, 1, or 2**, with one line of explanation for each.
+This checklist is filled in by the owner at the end of every study.
+`new_study.py` already scaffolded it into the study as
+`investigations/<slug>/hand-score.md` — the owner fills that copy in, scoring
+each item **0, 1, or 2**, with one line of explanation for each. This
+reference explains what each item means.
 
 - **2** — fully met, no hedging needed.
 - **1** — partially met, or met with an excuse attached.
 - **0** — not met.
+- **N/A** — doesn't apply to this study's methods (e.g. Apparatus for a
+  code-reading-only study); scored with a reason and left out of the total.
 
 ## The eleven items
 
