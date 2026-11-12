@@ -61,7 +61,9 @@ class DoctorEnv(unittest.TestCase):
             os.symlink(shutil.which("ps"), self.bin / "ps")
         self.env = {"HOME": str(self.home), "PATH": str(self.bin),
                     "INVESTIGATION_CONFIG_HOME": str(self.cfg),
-                    "GIT_CONFIG_NOSYSTEM": "1", "LANG": "C.UTF-8"}
+                    "GIT_CONFIG_NOSYSTEM": "1", "LANG": "C.UTF-8",
+                    **{k: v for k, v in os.environ.items()
+                     if k.startswith("COVERAGE_")}}
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
