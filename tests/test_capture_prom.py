@@ -234,8 +234,10 @@ class TestCaptureUrl(Base):
     def test_plain_http_non_loopback_allowed_with_flag(self):
         # --allow-insecure-http acknowledges the cleartext hop: the URL is
         # accepted and the (unreachable) remote fails as a normal query error,
-        # never as the cleartext refusal.
-        env = {**self.env, "PROM_TOKEN": TOKEN}
+        # never as the cleartext refusal. INVESTIGATION_PROM_TIMEOUT bounds the
+        # attempt so a network that silently blackholes the host (no local
+        # proxy answering 502) still fails fast.
+        env = {**self.env, "PROM_TOKEN": TOKEN, "INVESTIGATION_PROM_TIMEOUT": "2"}
         r = self.run_cli("--url", "http://10.0.0.5:9090", "--allow-insecure-http",
                          "--token-env", "PROM_TOKEN", env=env)
         self.assertEqual(r.returncode, 1, r.stderr)
@@ -251,9 +253,11 @@ class TestCaptureUrl(Base):
             r = self.run_cli("--url", p.url)          # http://127.0.0.1:<port>
         self.assertEqual(r.returncode, 0, r.stderr)
         # https to a real host is never a cleartext refusal; whatever happens
-        # on the network, the only exit-2 here would be the gate.
-        r = self.run_cli("--url", "https://prom.example.com:9090", cid="c2")
-        self.assertNotEqual(r.returncode, 2)
+        # on the network (refused, proxied 502, or blackholed — the timeout
+        # bounds the attempt), the only exit-2 here would be the gate.
+        env = {**self.env, "INVESTIGATION_PROM_TIMEOUT": "2"}
+        r = self.run_cli("--url", "https://prom.example.com:9090", env=env, cid="c2")
+        self.assertNotEqual(r.returncode, 2, r.stderr)
         self.assertNotIn("cleartext", r.stderr)
         self.assertTrue(capture_prom.is_loopback("localhost"))
         self.assertTrue(capture_prom.is_loopback("127.1.2.3"))
