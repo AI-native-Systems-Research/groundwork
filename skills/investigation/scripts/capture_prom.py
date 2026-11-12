@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import ipaddress
 import json
 import math
 import os
@@ -162,8 +163,22 @@ def parse_port_forward(spec: str) -> dict:
     return {"context": ctx, "namespace": ns, "service": svc, "port": port}
 
 
-def parse_url(url: str) -> tuple[str, str]:
-    """Return (base URL for requests, host for capture.json). Rejects inline creds."""
+def is_loopback(host: str) -> bool:
+    """True for localhost (any case) or any loopback IP (127.x.x.x, ::1)."""
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def parse_url(url: str, allow_insecure_http: bool = False) -> tuple[str, str]:
+    """Return (base URL for requests, host for capture.json). Rejects inline creds.
+
+    Also refuses plain http to a non-loopback host (the bearer token would
+    travel in cleartext) unless the caller explicitly acknowledged it.
+    """
     u = urllib.parse.urlsplit(url)
     if u.scheme not in ("http", "https") or not u.hostname:
         raise CaptureError("--url must be an http(s) URL with a host", 2)
@@ -172,6 +187,10 @@ def parse_url(url: str) -> tuple[str, str]:
                            "env var and pass --token-env VAR", 2)
     if u.query or u.fragment:
         raise CaptureError("--url must not carry a query string or fragment", 2)
+    if u.scheme == "http" and not is_loopback(u.hostname) and not allow_insecure_http:
+        raise CaptureError(f"--url uses plain http to non-loopback host {u.hostname}: "
+                           "the bearer token would be sent in cleartext; use https, "
+                           "or pass --allow-insecure-http to acknowledge it", 2)
     host = u.hostname if u.port is None else f"{u.hostname}:{u.port}"
     if ":" in (u.hostname or "") and u.port is None:
         host = f"[{u.hostname}]"
@@ -396,6 +415,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help=f"kubectl port-forward to svc (remote port default {DEFAULT_REMOTE_PORT})")
     ap.add_argument("--token-env", metavar="VAR",
                     help="name of the env var holding a bearer token (the value is never logged)")
+    ap.add_argument("--allow-insecure-http", action="store_true",
+                    help="allow --url to use plain http to a non-loopback host "
+                         "(the bearer token would be sent in cleartext)")
     ap.add_argument("--start", required=True, help="RFC 3339, e.g. 2026-11-05T10:00:00Z")
     ap.add_argument("--end", required=True, help="RFC 3339")
     ap.add_argument("--step", default="30s", help="query resolution (default 30s)")
@@ -428,7 +450,7 @@ def run(args) -> int:
         _SECRETS.append(token)
 
     if args.url:
-        base, host = parse_url(args.url)
+        base, host = parse_url(args.url, allow_insecure_http=args.allow_insecure_http)
         source = {"kind": "url", "host": host}
         cluster = host
         pf = None
