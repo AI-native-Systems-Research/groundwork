@@ -8,6 +8,7 @@ cand-0002 first, so rank order (not result.json order) is exercised.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -117,6 +118,47 @@ class SpotlightsCollectTest(unittest.TestCase):
         # non-numeric estimates keep their exact-string shape only
         self.assertEqual(cs.estimate_values(
             {"candidates": [{"estimated_impact": "high"}]}, None, None), {"high"})
+
+    def test_non_finite_estimates_do_not_crash_the_guard(self):
+        """NaN/Infinity estimates (json.dump writes them by default and
+        json.loads reads them back; nothing validates the field between the
+        file read and the guard) must not raise: the "{f:e}" exponent pass
+        has no exponent to partition and would ValueError on int(''),
+        violating collect_run's CouldNotRun-only contract. Pinned to main's
+        behavior — the forbidden set keeps the harmless base spellings
+        ('NaN'/'nan', 'Infinity'/'inf') and the run still collects."""
+        for v in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=v):
+                spellings = cs.numeric_spellings(v)
+                self.assertIn(json.dumps(v), spellings)
+                self.assertIn(str(v), spellings)
+                self.assertIn(repr(v), spellings)
+        # finite spellings are untouched by the non-finite early return
+        self.assertNotIn("nan", cs.numeric_spellings(0.5))
+        self.assertEqual(cs.estimate_values(
+            {"candidates": [{"estimated_impact": float("nan")}]}, None, None),
+            {"NaN", "nan"})
+        self.assertEqual(cs.estimate_values(
+            {"candidates": [{"estimated_impact": float("inf")}]}, None, None),
+            {"Infinity", "inf"})
+        # end to end: a result.json carrying a NaN estimate collects cleanly
+        # (at head pre-fix this raised ValueError inside collect_run)
+        result = json.loads((self.run_dir / "result.json").read_text())
+        result["report"]["candidates"][0]["estimated_impact"] = float("nan")
+        (self.run_dir / "result.json").write_text(json.dumps(result))
+        r = self.run_collect()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sec = self.section()
+        # cand 0001's estimate is NaN, so its span must yield no claim whose
+        # value spells the estimate — but the run itself collects, like main
+        drafted_ids = [c["candidate_id"] for c in sec["claims_draft"]]
+        self.assertIn("cand-toy_cache-0001", drafted_ids)  # BLOCK_SIZE = 16
+        for c in sec["claims_draft"]:
+            self.assertNotIn(c["value"], {"NaN", "nan"}, c)
+        # collect_run's CouldNotRun-only contract holds for the same input
+        sec2, _ = cs.collect_run(self.study, self.run_dir, top=5,
+                                 repo=self.target)
+        self.assertIn("claims_draft", sec2)
 
     def test_estimate_in_alternate_spelling_is_not_picked_as_a_value(self):
         """End to end through pick_value: a candidate whose span's first

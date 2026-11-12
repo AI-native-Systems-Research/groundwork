@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -136,11 +137,18 @@ def numeric_spellings(v) -> set:
     exponent forms, because pick_value returns whole stripped lines: a bare
     numeric literal early in a quoted span becomes the claim value whatever
     spelling it uses. A form qualifies only when float(form) == value, so a
-    rounded or approximate form is never emitted and can never over-block."""
+    rounded or approximate form is never emitted and can never over-block.
+    Non-finite estimates (NaN/Infinity, which json.dump writes and json.loads
+    reads back) keep only their base spellings ("nan"/"NaN"/"Infinity"/"inf"),
+    mirroring numeric_forms' tolerance of them: "{f:e}" has no exponent part
+    to read, and the round-trip filter cannot judge NaN (NaN != NaN), so any
+    exponent-extension of them would be guesswork."""
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return set()
     f = float(v)
     out = {json.dumps(v), str(v), repr(f)}
+    if not math.isfinite(f):
+        return out
     s = repr(f)
     trimmed = s.rstrip("0").rstrip(".")  # 5.0 -> "5" ("." guards the int part)
     if "." in s and "e" not in s and "E" not in s and trimmed:
