@@ -35,7 +35,9 @@ tools, tolerances, and habits covers both.
 
 ## How we use it
 
-In this repo the answer lives at `studies/<slug>/final/answer.json`. Every
+In this repo the answer lives at `investigations/<slug>/final/answer.json`,
+scaffolded there by `scripts/new_study.py` (the same run creates
+`question.md`, `plan.md` and `hand-score.md`). Every
 number that appears in the prose answer must also appear as a claim — if you
 wrote a number in a sentence, it needs its own row in `claims`. A claim whose
 evidence file cannot be found (or does not actually contain the value) is a

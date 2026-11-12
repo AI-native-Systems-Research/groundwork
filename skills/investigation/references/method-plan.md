@@ -18,10 +18,11 @@ It exits 0 unless the session isn't in a git repo. Use these fields:
 
 - `methods.<name>.available` / `.reason`: the only methods the plan may pick,
   and the reasons to quote for the rest.
-- `engines.<name>`: found, version/sha, pin (from SKILL.md frontmatter), latest
-  upstream release, and `warnings` (installed differs from the pin or the latest
-  release, or the engine sits on an unpushed branch). Tell the owner about every
-  warning. A study never pins or cites an unpushed engine commit.
+- `engines.<name>`: found, version/sha, pin (from `references/upstreams/lock.json`,
+  the only place upstream versions live — a pin key left in SKILL.md is ignored),
+  latest upstream release, and `warnings` (installed differs from the pin or the
+  latest release, or the engine sits on an unpushed branch). Tell the owner about
+  every warning. A study never pins or cites an unpushed engine commit.
 - `repo`: toplevel, remotes, which one is upstream, and the push remote.
   `push_is_upstream: true` means `new_study.py --commit-guard` will refuse.
 - `runtime`: the governed-launch runtime's version, the DB schema version it
