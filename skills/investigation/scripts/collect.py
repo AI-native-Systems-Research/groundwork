@@ -131,8 +131,11 @@ def rebase_evidence(work_dir: Path, evidence):
 # (formats pinned in tests/fixtures/workdir-answer-invalid/final_check.json and
 # catalogued in tests/fixtures/workdir-example/README.md).
 POINTER_RE = re.compile(r"(\S+)#(\S+?)(?=\s*:|\s|$)")
-CLAIM_ID_RE = re.compile(r"\bclaim\s+([A-Za-z][A-Za-z0-9_-]*\d[A-Za-z0-9_-]*"
-                         r"|[A-Za-z][A-Za-z0-9_-]{2,})\s*:")
+# A named claim id must carry a digit (every Nous claim id does: C1, C12, C1N):
+# the letter-only spelling matched ANY 3+ char word ('claim latency:', 'claim
+# the:'), handing the id tier to prose and skipping the pointer tier that
+# would have carried the taint.
+CLAIM_ID_RE = re.compile(r"\bclaim\s+([A-Za-z][A-Za-z0-9_-]*\d[A-Za-z0-9_-]*)\s*:")
 # Whole-answer verdicts (the README's other error families): they blame the
 # answer's shape, not any one claim, so they taint nobody.
 WHOLE_ANSWER_RE = re.compile(
@@ -220,13 +223,19 @@ def _cites(claim: dict, pointer) -> bool:
     return bool(metric) and metric == pkey
 
 
+# The file tier must look like a data file: the bare 'word.ext' shape also
+# matches decimal literals ('3.14', '99.9', '2.0'), which made an unattributable
+# error look like it named someone else's file and let every claim verify.
+FILE_RE = re.compile(r"\b[\w.-]+\.(?:json|jsonl|yaml|yml|md|txt|csv|log|py|sh)\b")
+
+
 def _attributable(err: str) -> bool:
     """Can the error name any claim at all (an id, a pointer, or a file)?"""
     if _named_claim_id(err) is not None:
         return True
     if _pointer_of(err) is not None:
         return True
-    return bool(re.search(r"\b[\w.-]+\.[A-Za-z0-9]{1,4}\b", err))
+    return bool(FILE_RE.search(err))
 
 
 def claim_verified(claim: dict, evidence_errors: list) -> bool:
