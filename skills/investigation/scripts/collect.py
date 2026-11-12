@@ -126,15 +126,138 @@ def rebase_evidence(work_dir: Path, evidence):
     return evidence
 
 
-def claim_verified(claim: dict, evidence_errors: list) -> bool:
-    """False when the claim's id or metric appears in a final_check
-    evidence_errors entry; otherwise the claim stands as Nous checked it."""
-    cid = str(claim.get("id") or "")
+# A Nous v2 evidence error names what it flags one of three ways: an explicit
+# "claim <ID>:" prefix, a "<path>#<key>" json pointer, or a bare file name
+# (formats pinned in tests/fixtures/workdir-answer-invalid/final_check.json and
+# catalogued in tests/fixtures/workdir-example/README.md).
+POINTER_RE = re.compile(r"(\S+)#(\S+?)(?=\s*:|\s|$)")
+CLAIM_ID_RE = re.compile(r"\bclaim\s+([A-Za-z][A-Za-z0-9_-]*\d[A-Za-z0-9_-]*"
+                         r"|[A-Za-z][A-Za-z0-9_-]{2,})\s*:")
+# Whole-answer verdicts (the README's other error families): they blame the
+# answer's shape, not any one claim, so they taint nobody.
+WHOLE_ANSWER_RE = re.compile(
+    r"\b(repro must not start with cd|claims_needed ids may be added, not removed"
+    r"|wait_for\b|\|effect\||noise_sd)\b")
+
+
+def _token_bounded(token: str, text: str) -> bool:
+    """token appears in text as a whole word: not glued to another id-ish
+    character (C1 must not match inside C12, hit_rate not inside hit_rates)."""
+    if not token:
+        return False
+    return re.search(rf"(?<![A-Za-z0-9_-]){re.escape(token)}(?![A-Za-z0-9_-])",
+                     text) is not None
+
+
+def _named_claim_id(err: str):
+    """The explicit 'claim <ID>:' attribution, when the error carries one."""
+    m = CLAIM_ID_RE.search(err)
+    return m.group(1) if m else None
+
+
+def _pointer_of(err: str):
+    """(path, key) of a '<path>#<key>' json-pointer reference, when present."""
+    m = POINTER_RE.search(err)
+    return (m.group(1), m.group(2)) if m else None
+
+
+def _claim_evidence_path(claim) -> str:
+    """The claim's own evidence path (string or {path} mapping), if any."""
+    ev = claim.get("evidence")
+    if isinstance(ev, str):
+        return ev
+    if isinstance(ev, dict) and isinstance(ev.get("path"), str):
+        return ev["path"]
+    detail = claim.get("evidence_detail")
+    if isinstance(detail, dict) and isinstance(detail.get("path"), str):
+        return detail["path"]
+    return ""
+
+
+def _names_file(err: str, path) -> bool:
+    """The error names the claim's evidence file by its basename, as a word
+    (the '.' in the tail keeps prose from matching a file-shaped token)."""
+    if not path:
+        return False
+    base = Path(str(path)).name
+    if not base or "." not in base:
+        return False
+    return _token_bounded(base, err)
+
+
+def _cites(claim: dict, pointer) -> bool:
+    """Does the claim cite the pointer's file basename AND key? A claim with
+    evidence_detail {path,key} (or a {path,key} evidence mapping) is matched
+    on both; a claim with a bare-string evidence path is matched on the
+    basename plus its metric (the value-mismatch family carries no claim id,
+    so the metric naming the pointer's key is the tie-breaker); a claim with
+    no evidence path at all is tainted when its metric IS the pointer's key.
+    The pointer's key is a json-pointer ('/p99_ms'), so keys and metrics are
+    compared after stripping the leading slash. Stricter than the old
+    metric-substring rule: an error pinning r9.json#/p99_ms never taints a
+    sibling that merely shares the metric name but cites another file."""
+    ppath, pkey = pointer
+    pbase = Path(ppath).name
+    pkey = pkey.lstrip("/")
+
+    def key_matches(k) -> bool:
+        return str(k or "").lstrip("/") == pkey
+
+    detail = claim.get("evidence_detail")
+    ev = claim.get("evidence")
+    if isinstance(detail, dict):
+        dpath = detail.get("path")
+        return (isinstance(dpath, str) and Path(dpath).name == pbase
+                and key_matches(detail.get("key")))
+    if isinstance(ev, dict):
+        epath = ev.get("path")
+        return (isinstance(epath, str) and Path(epath).name == pbase
+                and key_matches(ev.get("key")))
+    ev_path = ev if isinstance(ev, str) else None
     metric = str(claim.get("metric") or "")
+    if ev_path is not None:
+        return Path(ev_path).name == pbase and metric == pkey
+    return bool(metric) and metric == pkey
+
+
+def _attributable(err: str) -> bool:
+    """Can the error name any claim at all (an id, a pointer, or a file)?"""
+    if _named_claim_id(err) is not None:
+        return True
+    if _pointer_of(err) is not None:
+        return True
+    return bool(re.search(r"\b[\w.-]+\.[A-Za-z0-9]{1,4}\b", err))
+
+
+def claim_verified(claim: dict, evidence_errors: list) -> bool:
+    """False when a final_check evidence_errors entry flags THIS claim; True
+    when it stands as Nous checked it. An error is attributed by, in order:
+    an explicit 'claim <ID>:' prefix (which decides alone), a '<path>#<key>'
+    json pointer (taints the claims citing that file and key), or a bare file
+    name (taints the claims citing that file). An error attributable to no
+    claim conservatively taints every claim — a silent verified:true is the
+    failure mode this guard exists to prevent."""
+    cid = str(claim.get("id") or "")
     for err in evidence_errors:
         if not isinstance(err, str):
             continue
-        if (cid and cid in err) or (metric and metric in err):
+        named = _named_claim_id(err)
+        if named is not None:
+            # An explicit attribution decides alone: the fixture's C1/C2 share
+            # R1.json, and 'claim C1:' must not taint C2.
+            if named == cid:
+                return False
+            continue
+        pointer = _pointer_of(err)
+        if pointer is not None:
+            if _cites(claim, pointer):
+                return False
+            continue
+        if _token_bounded(cid, err):
+            return False
+        if _names_file(err, _claim_evidence_path(claim)):
+            return False
+        if not _attributable(err) and not WHOLE_ANSWER_RE.search(err):
             return False
     return True
 

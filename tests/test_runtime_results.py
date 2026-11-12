@@ -393,6 +393,38 @@ class SpotlightsResults(Mixin, SpotBase):
         self.assertIn("cite-y", b["collection"]["reason"])
         self.assertNotIn("findings", b)
 
+    def test_estimate_guard_blocks_alternate_numeric_spellings(self):
+        """The 'estimate never becomes a claim value' invariant holds for
+        every spelling of the number: a claims_draft value '0.50' against a
+        result.json carrying estimated_impact 0.5 fails collection through
+        the normalizer (at main only the exact strings '0.5' were blocked,
+        so the estimate flowed into an evidence-backed, verified claim)."""
+        inv, rec = self.run_fixture("candidates-found")
+        out = Path(rec["non_material"]["output_folder"])
+        result = json.loads((out / "result.json").read_text())
+        result["report"]["candidates"][0]["estimated_impact"] = 0.5
+        (out / "result.json").write_text(json.dumps(result))
+        real = self.adapter.collect
+
+        def sneaky(*a, **kw):
+            r = real(*a, **kw)
+            r["claims_draft"] = r["claims_draft"] + [
+                {"id": "cite-spelling", "metric": "m", "value": "0.50",
+                 "condition": "c", "evidence": "citations/x.txt"}]
+            r["estimate_guard"] = {"checked": 4, "violations": []}
+            return r
+        with mock.patch.object(self.adapter, "collect", sneaky):
+            b, _ = self.build(inv)
+        self.assertEqual(b["collection"]["state"], "failed")
+        self.assertIn("estimate", b["collection"]["reason"])
+        self.assertIn("cite-spelling", b["collection"]["reason"])
+        self.assertNotIn("findings", b)
+        # the same-value control: a claim value NOT equal to any spelling of
+        # the estimate stays collected
+        with mock.patch.object(self.adapter, "collect", real):
+            b, _ = self.build(inv)
+        self.assertEqual(b["collection"]["state"], "collected")
+
     def test_cli_collect_and_result_export(self):
         inv, _ = self.run_fixture("no-opportunity")
         env = {**os.environ, **self.env}
