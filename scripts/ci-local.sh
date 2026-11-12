@@ -28,6 +28,9 @@ job_unit() {
     "$PY" -m coverage run -m unittest discover tests || exit 1
     "$PY" -m coverage combine || exit 1
     "$PY" -m coverage report
+    # Per-file floor: a total-only gate stays green when one file drops to 0%
+    # (issues #2/#3/#8). Mirrors the CI unit job's extra step.
+    "$PY" "$REPO/scripts/check_coverage_floor.py"
   )
 }
 
