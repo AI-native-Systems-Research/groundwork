@@ -165,6 +165,44 @@ class CliContractTests(unittest.TestCase):
             self.assertEqual(r.returncode, 1)
             self.assertIn("bool", r.stderr)
 
+    def test_fabricated_number_in_unrelated_log_fails(self):
+        # End-to-end iron-rule attack from the hive's security finding: two
+        # entirely fabricated claims ({value: 2}, {value: 11}) citing an
+        # ordinary log file passed, because "2" matched inside "2026" and
+        # "11" inside the date "2026-11-10". They must now fail.
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "evidence.log").write_text(
+                "Investigation started 2026-11-10\n"
+                "router deployment: 3 replicas running, pid 4242\n"
+                "sha256:abcdef123456\n")
+            answer = dict(VALID, deliverable=None, claims=[
+                {"id": "c1", "metric": "p99_latency_ms", "value": 2,
+                 "condition": "fabricated", "evidence": "evidence.log"},
+                {"id": "c2", "metric": "error_rate_pct", "value": 11,
+                 "condition": "fabricated", "evidence": "evidence.log"}])
+            p = write_answer(td, answer)
+            r = run_validator(p, "--root", td)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("c1: evidence file does not contain value 2", r.stderr)
+            self.assertIn("c2: evidence file does not contain value 11", r.stderr)
+
+    def test_standalone_number_in_log_passes(self):
+        # The positive control for the same evidence text: a claim whose
+        # value really is in the log (3 replicas, pid 4242) still verifies.
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "evidence.log").write_text(
+                "Investigation started 2026-11-10\n"
+                "router deployment: 3 replicas running, pid 4242\n")
+            answer = dict(VALID, deliverable=None, claims=[
+                {"id": "c1", "metric": "replicas", "value": 3,
+                 "condition": "control", "evidence": "evidence.log"},
+                {"id": "c2", "metric": "router_pid", "value": 4242,
+                 "condition": "control", "evidence": "evidence.log"}])
+            p = write_answer(td, answer)
+            r = run_validator(p, "--root", td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("OK: 2 claims verified", r.stdout)
+
 
 class IronRuleUnitTests(unittest.TestCase):
     """Direct tests of the contains-value helpers."""
@@ -190,6 +228,64 @@ class IronRuleUnitTests(unittest.TestCase):
         self.assertFalse(va.text_contains("no numbers here", 4100.5))
         self.assertTrue(va.text_contains("policy PD-decider wins", "PD-decider"))
         self.assertFalse(va.text_contains("policy wins", "PD-decider"))
+
+    def test_text_contains_anchors_numbers(self):
+        # THE adversarial case the substring match missed: any ordinary log
+        # text (dates, pids, ports, sha fragments) satisfied a fabricated
+        # small-number claim. A number now matches only as a standalone
+        # number — and '-' is in the anchor class exactly because of dates.
+        log = ("Investigation started 2026-11-10 / router deployment: "
+               "3 replicas running, pid 4242 / sha256:abcdef123456")
+        for fabricated in (2, 10, 11, 26, 42, 2026):
+            self.assertFalse(va.text_contains(log, fabricated),
+                             f"{fabricated} matched inside ordinary log text")
+        self.assertTrue(va.text_contains(log, 3))   # "3 replicas" is real
+        self.assertTrue(va.text_contains(log, 4242))  # standalone pid
+        # Version/build strings and decimal fractions are not numbers either.
+        self.assertFalse(va.text_contains("v1.5.2", 5))
+        self.assertFalse(va.text_contains("latency was 50ms", 5))
+        self.assertFalse(va.text_contains("7.5 ops", 7))
+
+    def test_text_contains_keeps_legitimate_spellings(self):
+        # Everything a real analysis script prints still matches.
+        self.assertTrue(va.text_contains("mean 4100.5 rps", 4100.5))
+        self.assertTrue(va.text_contains("rate 0.347 per-op", 0.347))
+        self.assertTrue(va.text_contains("p99=10ms", 10))       # unit suffix
+        self.assertTrue(va.text_contains("took 10s", 10))
+        self.assertTrue(va.text_contains("10 replicas", 10))
+        self.assertTrue(va.text_contains("count: 7.", 7))       # sentence end
+        self.assertTrue(va.text_contains("settled at 4100.", 4100))
+        self.assertTrue(va.text_contains("delta: -5", -5))      # whole form
+        self.assertTrue(va.text_contains("(42)", 42))           # punctuation
+        # Deliberate tightening, documented in the fix: a range endpoint
+        # is an interval the value falls inside, not the measured value.
+        self.assertFalse(va.text_contains("values 0-100", 100))
+        self.assertFalse(va.text_contains("1.2.3", 2))          # dotted triple
+
+    def test_large_file_scan_anchors_numbers(self):
+        # The line-by-line path (files over LARGE_FILE_BYTES) must anchor
+        # the same way: a fabricated value inside a date line is not found.
+        old = va.LARGE_FILE_BYTES
+        va.LARGE_FILE_BYTES = 64
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                p = Path(td) / "big.txt"
+                p.write_text("filler line one\nfiller line two\n"
+                             "started 2026-11-10 pid 4242\n"
+                             "filler line five\n")
+                self.assertFalse(va.file_contains(p, 10)[0])
+                self.assertFalse(va.file_contains(p, 11)[0])
+                self.assertTrue(va.file_contains(p, 4242)[0])
+                # String claims keep their plain-substring semantics on the
+                # same line-by-line path.
+                q = Path(td) / "big-str.txt"
+                q.write_text("filler line one\nfiller line two\n"
+                             "winner PD-decider at p99 parity\n"
+                             "filler line five\n")
+                self.assertTrue(va.file_contains(q, "PD-decider")[0])
+                self.assertFalse(va.file_contains(q, "threshold-static")[0])
+        finally:
+            va.LARGE_FILE_BYTES = old
 
     def test_json_structural_match_nested(self):
         found, err = va.file_contains(FIXTURES / "evidence-results.json", 4100.5)
