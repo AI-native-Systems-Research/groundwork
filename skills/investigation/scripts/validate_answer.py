@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Validate a study's answer.json against the groundwork answer contract.
 
-The contract (docs/answer-contract.md; the mlsys study's contract, also
+The contract (skills/investigation/references/answer-contract.md; the
+mlsys study's contract, also
 adopted by Nous v2's answer.schema.json) allows exactly four top-level
 keys: answer (non-empty string), deliverable (null or an existing path),
 repro (ONE shell command that regenerates the headline numbers), and
@@ -26,8 +27,8 @@ Usage: python3 scripts/validate_answer.py <answer.json> [--root DIR]
        [--check-citations [--repo NAME=PATH ...]]
 --root is the base for resolving RELATIVE evidence and deliverable paths
 (absolute paths are used as-is); it defaults to the parent of the answer
-file's directory, so studies/<slug>/final/answer.json resolves against
-studies/<slug>/ — the study dir.
+file's directory, so investigations/<slug>/final/answer.json resolves
+against investigations/<slug>/ — the study dir.
 
 --check-citations additionally verifies code-citation evidence: for every
 claim whose evidence path is under citations/ (relative to the root), the
@@ -540,7 +541,8 @@ def main(argv=None) -> int:
         return 2
 
     # Default root: the parent of the answer file's directory, so
-    # studies/<slug>/final/answer.json resolves against studies/<slug>/.
+    # investigations/<slug>/final/answer.json resolves against
+    # investigations/<slug>/.
     root = Path(args.root) if args.root else answer_path.resolve().parent.parent
     root = root.resolve()
 

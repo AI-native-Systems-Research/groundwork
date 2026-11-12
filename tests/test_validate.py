@@ -132,8 +132,8 @@ class CliContractTests(unittest.TestCase):
             self.assertIn("c1: evidence file does not exist", r.stderr)
 
     def test_default_root_is_study_dir(self):
-        # studies/<slug>/final/answer.json must resolve evidence against
-        # studies/<slug>/ with no --root passed.
+        # investigations/<slug>/final/answer.json must resolve evidence
+        # against investigations/<slug>/ with no --root passed.
         with tempfile.TemporaryDirectory() as td:
             study = Path(td) / "studies" / "q1-slug"
             (study / "final").mkdir(parents=True)
