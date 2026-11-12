@@ -142,10 +142,16 @@ def numeric_spellings(v) -> set:
     reads back) keep only their base spellings ("nan"/"NaN"/"Infinity"/"inf"),
     mirroring numeric_forms' tolerance of them: "{f:e}" has no exponent part
     to read, and the round-trip filter cannot judge NaN (NaN != NaN), so any
-    exponent-extension of them would be guesswork."""
+    exponent-extension of them would be guesswork. Ints beyond float range
+    (json.loads parses a >308-digit decimal back as int) likewise crash
+    float(v) with OverflowError, so they too fall back to their base
+    spellings."""
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return set()
-    f = float(v)
+    try:
+        f = float(v)
+    except OverflowError:            # e.g. 10**400 parsed from JSON
+        return {json.dumps(v), str(v)}
     out = {json.dumps(v), str(v), repr(f)}
     if not math.isfinite(f):
         return out

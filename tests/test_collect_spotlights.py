@@ -160,6 +160,26 @@ class SpotlightsCollectTest(unittest.TestCase):
                                  repo=self.target)
         self.assertIn("claims_draft", sec2)
 
+    def test_huge_int_estimates_do_not_crash_the_guard(self):
+        """An int beyond float range (10**400) must not raise: json.dumps
+        writes a 401-digit decimal, json.loads parses it back as int (pinned
+        below — this is what makes the input reachable from result.json),
+        and float(v) raises OverflowError at the top of numeric_spellings —
+        the same contract escape as the non-finite case, one angle deeper.
+        The huge estimate keeps exactly its decimal spellings, which is
+        main's behavior for the same input (estimate_values returns
+        json.dumps(v) and str(v) for ints), so the estimate stays
+        unpickable: fail-closed, no over-blocking."""
+        big = 10 ** 400
+        self.assertIsInstance(json.loads(json.dumps({"v": big}))["v"], int)
+        expected = {json.dumps(big), str(big)}          # equal strings: 1 spelling
+        self.assertEqual(cs.numeric_spellings(big), expected)
+        self.assertEqual(cs.estimate_values(
+            {"candidates": [{"estimated_impact": big}]}, None, None),
+            expected)
+        # finite spellings are untouched by the OverflowError guard
+        self.assertNotIn("1" + "0" * 400, cs.numeric_spellings(0.5))
+
     def test_estimate_in_alternate_spelling_is_not_picked_as_a_value(self):
         """End to end through pick_value: a candidate whose span's first
         non-blank line is '0.50' against estimated_impact 0.5 must give a
