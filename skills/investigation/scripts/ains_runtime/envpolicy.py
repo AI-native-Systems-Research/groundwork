@@ -34,7 +34,7 @@ import os
 import re
 from typing import Any, Iterable, Mapping
 
-SECRET_NAME_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|AUTH", re.IGNORECASE)
+SECRET_NAME_RE = re.compile(r"(?:^|_)(KEY|TOKEN|SECRET|PASSWORD|AUTH)(?:_|$)", re.IGNORECASE)
 MIN_SECRET_LEN = 8
 
 

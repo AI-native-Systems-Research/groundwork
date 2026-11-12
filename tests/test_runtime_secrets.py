@@ -30,9 +30,20 @@ def all_bytes(root: Path) -> bytes:
 
 class EnvPolicy(unittest.TestCase):
     def test_secret_names(self):
-        for n in ("ANTHROPIC_API_KEY", "GH_TOKEN", "DB_PASSWORD", "X_AUTH", "my_secret"):
+        # True: the keyword is a whole _-delimited segment (or the whole name).
+        for n in ("ANTHROPIC_API_KEY", "GH_TOKEN", "DB_PASSWORD", "X_AUTH",
+                  "my_secret", "PROM_TOKEN", "AUTH_TOKEN", "MY_SECRET_VALUE",
+                  "API_KEY", "GITHUB_TOKEN", "SECRET", "AWS_SECRET_ACCESS_KEY",
+                  "SSH_AUTH_SOCK", "TOKEN_COUNT"):
             self.assertTrue(envpolicy.is_secret_name(n), n)
-        for n in ("HOME", "PATH", "CLAUDE_CODE_ENTRYPOINT", "NOUS_CAMPAIGN_PARENT"):
+        # False: ordinary names whose *substrings* contain a keyword but whose
+        # _-delimited segments never equal one (regression: an unanchored
+        # pattern matched 9 of these and made e.g. git identity values
+        # forbidden strings in messages, records and exports).
+        for n in ("HOME", "PATH", "CLAUDE_CODE_ENTRYPOINT", "NOUS_CAMPAIGN_PARENT",
+                  "GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME", "GIT_AUTHOR_EMAIL",
+                  "GIT_COMMITTER_EMAIL", "WEBAUTH_URL", "AUTHORIZED_KEYS",
+                  "WEBAUTHN", "AUTHORIZATION", "MYTOKEN", "MY-TOKEN", "TOKEN123"):
             self.assertFalse(envpolicy.is_secret_name(n), n)
 
     def test_short_values_ignored(self):

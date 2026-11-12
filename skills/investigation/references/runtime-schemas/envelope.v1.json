@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://groundwork.local/runtime-schemas/envelope.v1.json",
   "title": "AINS message envelope v1",
-  "description": "Documentation only. The authoritative validator is scripts/ains_runtime/contracts.py (stdlib, no jsonschema dependency); where this document and the code disagree, the code wins and this file is a bug. Every message type shares this envelope; `body` is type-specific. Strings must not contain the value of any environment variable whose name matches KEY|TOKEN|SECRET|PASSWORD|AUTH (values of 8+ chars); such a message is rejected (not expressible in JSON Schema).",
+  "description": "Documentation only. The authoritative validator is scripts/ains_runtime/contracts.py (stdlib, no jsonschema dependency); where this document and the code disagree, the code wins and this file is a bug. Every message type shares this envelope; `body` is type-specific. Strings must not contain the value of any environment variable whose name contains KEY, TOKEN, SECRET, PASSWORD or AUTH as a whole underscore-delimited segment (or as the whole name, case-insensitive; values of 8+ chars); such a message is rejected (not expressible in JSON Schema).",
   "type": "object",
   "additionalProperties": false,
   "required": [
