@@ -5,6 +5,7 @@ A capture lives at <study>/telemetry/<capture-id>/:
   capture.json        CAPTURE_VERSION; source, window, queries, empty_queries,
                       files {relpath: sha256}, moved {relpath: {sha256, path}}
   prom/<name>.json    the raw Prometheus query_range response, byte-for-byte
+                      (a failed query's error body has the bearer token masked)
   metrics.jsonl       one OTel resourceMetrics record per (query x series)
   summary.json        per-query reductions (see summarize_query_range)
 

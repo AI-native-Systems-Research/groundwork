@@ -110,7 +110,7 @@ the size guard has moved it.
 | `queries` | The exact merged `{name: promql}` that was run. |
 | `query_sources` | Where the queries came from, in merge order. |
 | `empty_queries` | Queries that succeeded with zero series. They are recorded, not failures. The raw file is still written. |
-| `failed_queries` | `{name: message}` for queries where Prometheus returned `status: error` or the request failed. When Prometheus sent an error body, it is kept as `prom/<name>.json`. Only a failure of every query exits nonzero. |
+| `failed_queries` | `{name: message}` for queries where Prometheus returned `status: error` or the request failed. When Prometheus sent an error body, it is kept as `prom/<name>.json` (with the bearer token masked, if the body echoed it). Only a failure of every query exits nonzero. |
 | `captured_at` | When the capture ran (wall clock, UTC). |
 | `files` | `{relpath: sha256}` for every file still in the capture directory except `capture.json` itself. |
 | `moved` | `{relpath: {sha256, path}}` for files the size guard moved to the runs dir. |
@@ -120,6 +120,9 @@ the size guard has moved it.
 The body of `POST /api/v1/query_range` (`query`, `start`, `end`, `step`), saved
 exactly as received: `{"status":"success","data":{"resultType":"matrix","result":[...]}}`.
 This is the primary evidence. Claims can cite it directly, or cite `summary.json`.
+A successful query's body is byte-for-byte; a failed query's error body is kept
+with the bearer token masked (`***`) if the server echoed it back, so a
+misbehaving gateway cannot smuggle the token into the study.
 
 ### `summary.json` (`summary_version: 1`)
 
