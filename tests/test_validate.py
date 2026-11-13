@@ -203,6 +203,59 @@ class CliContractTests(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("OK: 2 claims verified", r.stdout)
 
+    def test_huge_int_claim_value_gets_a_verdict(self):
+        # A huge-int claim value (json.loads parses a >308-digit decimal
+        # back as int) crashed the CLI with a raw OverflowError traceback
+        # from numeric_forms' bare float(v) — exit 1, no verdict at all.
+        # It must instead get a real verdict: verified when the evidence
+        # carries the same huge int, a clean per-claim error when not.
+        big = 10 ** 400
+        self.assertIsInstance(json.loads(json.dumps({"v": big}))["v"], int)
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "evidence.json").write_text(
+                json.dumps({"n": big}))
+            answer = dict(VALID, deliverable=None, claims=[
+                {"id": "c1", "metric": "n", "value": big,
+                 "condition": "huge", "evidence": "evidence.json"}])
+            p = write_answer(td, answer)
+            r = run_validator(p, "--root", td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("c1 OK", r.stdout)
+            self.assertIn("OK: 1 claims verified", r.stdout)
+            # fail-closed direction: a different huge int is not contained
+            (Path(td) / "evidence.json").write_text(
+                json.dumps({"n": big + 1}))
+            r = run_validator(p, "--root", td)
+            self.assertEqual(r.returncode, 1, r.stderr)
+            self.assertIn("c1: evidence file does not contain value", r.stderr)
+            # and the verdict is the whole output: no traceback escapes
+            self.assertNotIn("Traceback", r.stderr)
+
+    def test_huge_int_in_evidence_does_not_crash_normal_claim(self):
+        # The sharpest surface: the claim is perfectly normal (value 5),
+        # but one huge int anywhere in the evidence JSON crashed the whole
+        # validation via json_contains -> scalar_matches -> math.isclose
+        # — exit 1 + traceback instead of a verdict. json_contains walks
+        # every scalar, so ANY huge int in the file is enough.
+        big = 10 ** 400
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "evidence.json").write_text(
+                json.dumps({"totals": big, "score": 5}))
+            answer = dict(VALID, deliverable=None, claims=[
+                {"id": "c1", "metric": "score", "value": 5,
+                 "condition": "normal", "evidence": "evidence.json"}])
+            p = write_answer(td, answer)
+            r = run_validator(p, "--root", td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("OK: 1 claims verified", r.stdout)
+            # fail-closed: the huge int must not satisfy a claim of 5
+            (Path(td) / "evidence.json").write_text(
+                json.dumps({"totals": big, "score": 6}))
+            r = run_validator(p, "--root", td)
+            self.assertEqual(r.returncode, 1, r.stderr)
+            self.assertIn("c1: evidence file does not contain value 5", r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+
 
 class IronRuleUnitTests(unittest.TestCase):
     """Direct tests of the contains-value helpers."""
@@ -221,6 +274,36 @@ class IronRuleUnitTests(unittest.TestCase):
         # A rounded spelling would let 0.347 match a bare "0.3" in the text.
         self.assertNotIn("0.3", va.numeric_forms(0.347))
         self.assertNotIn("0.35", va.numeric_forms(0.347))
+
+    def test_numeric_forms_and_scalar_matches_tolerate_huge_ints(self):
+        """An int beyond float range (10**400) must not raise: json.dumps
+        writes a 401-digit decimal, json.loads parses it back as int
+        (pinned below — this is what makes the input reachable from
+        answer.json and evidence files), and float(v) raises OverflowError
+        at the top of numeric_forms — the identical bug 6f72438 fixed in
+        collect_spotlights.numeric_spellings, its mirror here. The huge int
+        keeps exactly its decimal spelling (the only one the text could
+        carry); scalar_matches compares such ints exactly — no huge int is
+        within rel_tol of a finite value, and huge-vs-huge either is the
+        same int or is not."""
+        big = 10 ** 400
+        self.assertIsInstance(json.loads(json.dumps({"v": big}))["v"], int)
+        self.assertEqual(va.numeric_forms(big), [str(big)])
+        self.assertEqual(va.numeric_forms(-big), [str(-big)])
+        self.assertTrue(va.scalar_matches(big, big))
+        self.assertFalse(va.scalar_matches(big, big + 1))
+        self.assertFalse(va.scalar_matches(big, 5))   # claim side huge
+        self.assertFalse(va.scalar_matches(5, big))   # scalar side huge
+        # json_contains walks every scalar: a huge int anywhere in the doc
+        # must not crash the walk (scalar_matches(5, big) above is that
+        # guard, reached end-to-end in the CLI tests)
+        self.assertTrue(va.json_contains({"a": [big, {"b": 5}]}, 5))
+        self.assertTrue(va.json_contains({"a": big}, big))
+        self.assertFalse(va.json_contains({"a": big}, 5))
+        # finite spellings are untouched by the OverflowError guards
+        self.assertNotIn("1" + "0" * 400, va.numeric_forms(0.5))
+        self.assertTrue(va.scalar_matches(0.347, 0.347001))  # tolerance kept
+        self.assertFalse(va.scalar_matches(5, 4))
 
     def test_text_contains(self):
         self.assertTrue(va.text_contains("mean 4100.5 rps", 4100.5))
