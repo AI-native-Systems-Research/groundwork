@@ -188,6 +188,63 @@ class TestCommitGuard(NewStudyBase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("untracked", r.stderr)
 
+    def test_refuses_outside_any_git_repo(self):
+        # self.home is a plain directory inside the tempdir: no repo above it.
+        r = self.run_ns(self.home, "--commit-guard")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not inside a git repo", r.stderr)
+
+    def test_refuses_on_detached_head(self):
+        repo = self.fork_repo()
+        self.run_ns(repo, "--slug", "a", "--tracking", "fork")
+        head = sh("git", "rev-parse", "HEAD", cwd=repo).strip()
+        sh("git", "checkout", "-q", "--detach", head, cwd=repo)
+        r = self.run_ns(repo, "--commit-guard")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("detached HEAD", r.stderr)
+
+    def test_refuses_when_upstream_remote_is_ambiguous(self):
+        # origin plus a second remote, neither named 'upstream', and no repo
+        # config yet: doctor can't tell which is upstream, so the guard refuses
+        # rather than guess. (Scaffolding first would resolve it: the written
+        # config pins upstream_remote, so this refusal is the no-config path.)
+        repo = make_repo(self.tmp / "router", {
+            "origin": "git@github.com:org/router.git",
+            "other": "git@github.com:org/router-mirror.git"})
+        r = self.run_ns(repo, "--commit-guard")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("upstream remote unknown", r.stderr)
+        self.assertIn("upstream_remote in the repo config", r.stderr)
+
+    def test_refuses_when_branch_has_no_push_remote(self):
+        # 'upstream' resolves (a remote by that name exists) but the branch has
+        # no configured remote and no origin to fall back to: nowhere to push.
+        repo = make_repo(self.tmp / "router", {
+            "upstream": "git@github.com:org/router.git",
+            "mirror": "git@github.com:org/router-mirror.git"})
+        self.run_ns(repo, "--slug", "a", "--tracking", "fork")
+        r = self.run_ns(repo, "--commit-guard")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("has no push remote", r.stderr)
+
+
+class TestScaffoldRefusals(NewStudyBase):
+    def test_refuses_outside_any_git_repo(self):
+        r = self.run_ns(self.home, "--slug", "a", "--tracking", "fork")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("not inside a git repo", r.stderr)
+
+    def test_refuses_when_repo_config_tracking_is_invalid(self):
+        repo = self.fork_repo()
+        self.run_ns(repo, "--slug", "a", "--tracking", "fork")
+        cfgp = repo / "investigations/config.yaml"
+        cfgp.write_text("tracking: sometimes\n")
+        r = self.run_ns(repo, "--slug", "b", "--tracking", "fork")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("`tracking` must be fork or untracked", r.stderr)
+        self.assertIn("sometimes", r.stderr)
+        self.assertFalse((repo / "investigations/b").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
