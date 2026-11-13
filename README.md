@@ -130,8 +130,8 @@ npx skills add AI-native-Systems-Research/groundwork --skill investigation -a cl
 npx skills add AI-native-Systems-Research/groundwork --skill investigation -g               # → ~/.claude/skills/ (all repos)
 ```
 
-The repo is private for now, so you need GitHub access to it. To install
-from a local checkout instead, swap in its path (e.g. `/path/to/groundwork`).
+To install from a local checkout instead, swap in its path
+(e.g. `/path/to/groundwork`).
 
 Installing again later can pick up interface changes, so pin a commit if you
 need the same behaviour twice.
