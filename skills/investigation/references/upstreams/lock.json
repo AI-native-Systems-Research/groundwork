@@ -57,6 +57,24 @@
                       "patches/inference-sim-agg-go-mod.diff"]
         }
       }
+    },
+    "sim2real": {
+      "repo": "https://github.com/inference-sim/sim2real.git",
+      "ref": "main",
+      "commit": "28a8e988e01f0f22b83ebfb19c47d867926828b2",
+      "facts": "sim2real.json"
+    },
+    "vllm": {
+      "repo": "https://github.com/vllm-project/vllm.git",
+      "ref": "main",
+      "commit": "2f1cba799e02209e9782a747f7620e55d8251e67",
+      "facts": "vllm.json"
+    },
+    "llm-d-router": {
+      "repo": "https://github.com/inference-sim/llm-d-router.git",
+      "ref": "main",
+      "commit": "618eb0a99470edd7afdc8afced5df0cbef18e163",
+      "facts": "llm-d-router.json"
     }
   }
 }

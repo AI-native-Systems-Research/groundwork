@@ -26,6 +26,7 @@ The CLI entry point for subprocess tests is tests/_runtime_fake_cli.py.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -45,7 +46,12 @@ ENGINES = HERE / "fixtures" / "runtime" / "fake_engines"
 
 def engine_argv(experiment) -> list[str]:
     if isinstance(experiment, str) and (ENGINES / f"{experiment}.py").is_file():
-        return [sys.executable, str(ENGINES / f"{experiment}.py")]
+        # abspath, not raw sys.executable: CPython keeps the spelling the
+        # interpreter was invoked with (e.g. ../venv/bin/python) in the
+        # parent, while every spawned child normalizes it — and argv is part
+        # of the material digest, so a preparation built from the raw
+        # spelling can never digest-match the child's revalidation rebuild.
+        return [os.path.abspath(sys.executable), str(ENGINES / f"{experiment}.py")]
     return ["fake-engine"]
 
 

@@ -241,7 +241,7 @@ def reserve(store: Store, prep_id: str, *, env: Mapping[str, str] | None = None,
         raise LaunchError(str(e)) from e
     if crash_hook_present(env):
         store.invocation_event(inv_id, "test_crash_hook_present",
-                               {"at": env.get(TEST_CRASH_AT_VAR)})
+                               {"at": env.get(TEST_CRASH_AT_VAR)}, env=env)
     return inv_id, launch_spec, warnings
 
 
@@ -262,7 +262,7 @@ def spawn_supervisor(store: Store, inv_id: str, *,
     except OSError as e:
         # Nothing was spawned: the reservation stays (approval consumed); the
         # owner resolves it with `reconcile --mark-not-launched`.
-        store.transition(inv_id, (RESERVED,), RECOVERY_REQUIRED,
+        store.transition(inv_id, (RESERVED,), RECOVERY_REQUIRED, env=env,
                          detail={"reason": f"supervisor spawn failed: {e}"})
         raise LaunchError(f"could not start the supervisor: {e}; the invocation "
                           f"{inv_id} is recovery_required") from e
@@ -270,7 +270,8 @@ def spawn_supervisor(store: Store, inv_id: str, *,
         sup_log.close()
     _SPAWNED.append(proc)
     sident = procid.identity(proc.pid, include_zombie=True)
-    store.record_if_null(inv_id, "launch:supervisor_spawned", supervisor_pid=proc.pid,
+    store.record_if_null(inv_id, "launch:supervisor_spawned", env=env,
+                         supervisor_pid=proc.pid,
                          supervisor_start=sident.start if sident else None)
     return proc.pid
 
@@ -321,13 +322,13 @@ def supervise(store: Store, inv_id: str, *, env: Mapping[str, str] | None = None
     if inv["supervisor_pid"] not in (None, me):
         log(f"{inv_id} belongs to supervisor {inv['supervisor_pid']}; not spawning")
         return 1
-    if not store.transition(inv_id, (RESERVED,), SPAWNING, **mine):
+    if not store.transition(inv_id, (RESERVED,), SPAWNING, env=env, **mine):
         log(f"{inv_id} is {store.get_invocation(inv_id)['state']}, not reserved; "
             "not spawning")
         return 1
     log(f"supervisor {me} for {inv_id}: spawning {spec['argv'][0]}")
     if store.get_invocation(inv_id)["cancel_requested_at"]:
-        store.transition(inv_id, (SPAWNING,), CANCELLED, ended_at=now(),
+        store.transition(inv_id, (SPAWNING,), CANCELLED, ended_at=now(), env=env,
                          detail={"reason": "cancel requested before the engine was "
                                            "spawned; nothing ran"})
         log("cancel requested before spawn; engine not started")
@@ -341,7 +342,7 @@ def supervise(store: Store, inv_id: str, *, env: Mapping[str, str] | None = None
                                 stdout=eng_log, stderr=subprocess.STDOUT,
                                 start_new_session=True, close_fds=True)
     except OSError as e:
-        store.transition(inv_id, (SPAWNING,), FAILED, ended_at=now(),
+        store.transition(inv_id, (SPAWNING,), FAILED, ended_at=now(), env=env,
                          native_json=canonical_json({
                              "state": FAILED, "reason": f"engine spawn failed: {e}",
                              "native_stop_reason": None, "partial": False,
@@ -356,18 +357,18 @@ def supervise(store: Store, inv_id: str, *, env: Mapping[str, str] | None = None
     # identity even if it already exited (zombie).
     ident = procid.identity(proc.pid, include_zombie=True)
     if not store.transition(inv_id, (SPAWNING,), RUNNING, engine_pid=proc.pid,
-                            engine_start=ident.start if ident else None,
+                            engine_start=ident.start if ident else None, env=env,
                             native_run_id=spec.get("native_run_id")):
         log(f"{inv_id} left `spawning` while the engine started; recording the pid "
             "as an event only")
         store.invocation_event(inv_id, "engine_spawned_out_of_band",
-                               {"engine_pid": proc.pid})
+                               {"engine_pid": proc.pid}, env=env)
     log(f"engine pid {proc.pid} running")
     crash_point("supervisor:after_running", env, log)
     rc = proc.wait()
     crash_point("supervisor:after_exit", env, log)
     ok = store.transition(inv_id, (RUNNING,), EXITED, exit_code=rc, ended_at=now(),
-                          where={"engine_pid": proc.pid})
+                          env=env, where={"engine_pid": proc.pid})
     log(f"engine exited {rc}" + ("" if ok else " (state already changed; not recorded)"))
     # Done. No collection, no classification, no next step (plan §4.3 step 6).
     return 0

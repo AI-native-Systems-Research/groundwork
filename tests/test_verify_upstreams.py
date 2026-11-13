@@ -74,7 +74,9 @@ def report() -> dict:
 
 @unittest.skipUnless(HAVE_YAML, "PyYAML not installed")
 class CheckEngines(unittest.TestCase):
-    """check_engines: installed sha vs the lock, per engine (nous, spotlights)."""
+    """check_engines: installed sha vs the lock, per engine (nous, spotlights,
+    sim2real); vllm and llm-d-router are locked as metric-name sources only
+    and appear as notes, never machine checks."""
 
     def run_check(self, engine_info) -> dict:
         rep = report()
@@ -90,10 +92,22 @@ class CheckEngines(unittest.TestCase):
         self.assertTrue(any("nous not installed here" in w for w in rep["warnings"]))
         self.assertTrue(any("spotlights-engine not installed here" in w
                             for w in rep["warnings"]))
+        self.assertTrue(any("sim2real not installed here" in w
+                            for w in rep["warnings"]))
+
+    def test_metric_name_sources_are_notes_never_machine_checks(self):
+        rep = self.run_check({"found": True, "sha": "c" * 40, "warnings": []})
+        self.assertEqual(rep["failures"], [])
+        self.assertEqual(
+            [n for n in rep["notes"] if "metric-name source only" in n],
+            ["vllm: locked as a metric-name source only (facts in vllm.json); "
+             "nothing to install or check on a machine",
+             "llm-d-router: locked as a metric-name source only (facts in "
+             "llm-d-router.json); nothing to install or check on a machine"])
 
     def test_sha_mismatch_is_a_failure(self):
         rep = self.run_check({"found": True, "sha": "d" * 40, "warnings": []})
-        self.assertEqual(len(rep["failures"]), 2)  # nous + spotlights
+        self.assertEqual(len(rep["failures"]), 3)  # nous + spotlights + sim2real
         self.assertIn("nous: installed dddddddddddd is not the locked cccccccccccc",
                       rep["failures"])
 

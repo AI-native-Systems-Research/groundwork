@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _runtime_util import RUNTIME, envelope, request  # noqa: E402
@@ -30,11 +31,15 @@ def all_bytes(root: Path) -> bytes:
 
 class EnvPolicy(unittest.TestCase):
     def test_secret_names(self):
-        # True: the keyword is a whole _-delimited segment (or the whole name).
+        # True: the keyword is a whole _-delimited segment (or the whole name),
+        # optionally flanked by digits inside the segment (KEY2/2KEY/SECRET1 --
+        # the standard rotated/second-credential convention, issue #21).
         for n in ("ANTHROPIC_API_KEY", "GH_TOKEN", "DB_PASSWORD", "X_AUTH",
                   "my_secret", "PROM_TOKEN", "AUTH_TOKEN", "MY_SECRET_VALUE",
                   "API_KEY", "GITHUB_TOKEN", "SECRET", "AWS_SECRET_ACCESS_KEY",
-                  "SSH_AUTH_SOCK", "TOKEN_COUNT"):
+                  "SSH_AUTH_SOCK", "TOKEN_COUNT",
+                  "GITHUB_TOKEN2", "API_KEY2", "OPENAI_API_KEY2", "KEY2",
+                  "2KEY", "SECRET1", "PASSWORD8", "AUTH7", "ANTHROPIC_KEY2"):
             self.assertTrue(envpolicy.is_secret_name(n), n)
         # False: ordinary names whose *substrings* contain a keyword but whose
         # _-delimited segments never equal one (regression: an unanchored
@@ -43,8 +48,15 @@ class EnvPolicy(unittest.TestCase):
         for n in ("HOME", "PATH", "CLAUDE_CODE_ENTRYPOINT", "NOUS_CAMPAIGN_PARENT",
                   "GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME", "GIT_AUTHOR_EMAIL",
                   "GIT_COMMITTER_EMAIL", "WEBAUTH_URL", "AUTHORIZED_KEYS",
-                  "WEBAUTHN", "AUTHORIZATION", "MYTOKEN", "MY-TOKEN", "TOKEN123"):
+                  "WEBAUTHN", "AUTHORIZATION", "MYTOKEN", "MY-TOKEN",
+                  "AUTHOR", "AUTHORS", "KEYSTONE", "MONKEY", "KEYNOTE"):
             self.assertFalse(envpolicy.is_secret_name(n), n)
+        # TOKEN123 pins the chosen direction for digit-glued placeholder-style
+        # names: fail-closed (secret-named), matching TOKEN_COUNT's accepted
+        # behavior. MYTOKEN2 stays False -- the digits must glue to a keyword
+        # that is already a whole segment, not rescue a glued substring.
+        self.assertTrue(envpolicy.is_secret_name("TOKEN123"))
+        self.assertFalse(envpolicy.is_secret_name("MYTOKEN2"))
 
     def test_short_values_ignored(self):
         self.assertEqual(envpolicy.secret_values(ENV), {"FAKE_API_TOKEN": SECRET})
@@ -143,6 +155,125 @@ class Planting(unittest.TestCase):
         self.assertNotIn(SECRET, r.stdout + r.stderr)
         self.assertIn("FAKE_API_TOKEN", r.stdout)
         f.unlink()
+        self.assert_nowhere()
+
+
+class EventGuards(unittest.TestCase):
+    """A secret value in ANY stored event detail is refused, not recorded.
+
+    submit()/insert_preparation()/insert_approval() were always guarded;
+    invocation_event() was guarded since the cancel-redaction work. The
+    remaining event-family write paths — add_event itself and its four
+    invocation wrappers (set_invocation_state, transition, record_if_null,
+    request_cancel) — skipped the check, so a cancel reason or transition
+    detail carrying a secret value was persisted verbatim into the
+    append-only events table (which triggers make impossible to scrub).
+    These tests plant a secret through each path and assert the write is
+    refused with StoreError, the transaction rolls back, and nothing is
+    recorded anywhere on disk."""
+
+    def setUp(self):
+        # A fresh store like Planting's, but this class plants its own work
+        # item + preparation + approval + reserved invocation: the minimum
+        # state the invocation write paths need. No adapter, no engine, no
+        # process — everything runs in-process.
+        self.tmp = Path(tempfile.mkdtemp())
+        self.db = self.tmp / "runs" / S.DB_NAME
+        self.store = S.open_store(self.db)
+        self.assertTrue(self.store.submit(request(), env=ENV).ok)
+        rec = {"capability": "nous", "material": {"q": "x"}}
+        d = self.store.insert_preparation("prep-1", "w-1", rec, env=ENV)
+        self.store.insert_approval("appr-1", "prep-1", d, "chat", "go, code abc",
+                                   env=ENV)
+        self.store.reserve_invocation("inv-1", "prep-1")
+
+    def tearDown(self):
+        self.store.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def assert_nowhere(self):
+        self.store.close()
+        blob = all_bytes(self.tmp)
+        self.assertNotIn(SECRET.encode(), blob)
+        self.store = S.open_store(self.db)
+
+    def _events(self, inv="inv-1"):
+        return [json.dumps(e) for e in self.store.list_events(entity_id=inv)]
+
+    def test_secret_in_add_event_is_refused(self):
+        with self.assertRaisesRegex(S.StoreError, "FAKE_API_TOKEN") as cm:
+            self.store.add_event("invocation", "inv-1", "note",
+                                 detail={"why": f"boom {SECRET}"}, env=ENV)
+        self.assertNotIn(SECRET, str(cm.exception))
+        self.assertFalse(any(SECRET in e for e in self._events()))
+        self.assert_nowhere()
+
+    def test_secret_in_set_invocation_state_is_refused(self):
+        with self.assertRaisesRegex(S.StoreError, "FAKE_API_TOKEN"):
+            self.store.set_invocation_state("inv-1", "running",
+                                            detail={"why": f"boom {SECRET}"}, env=ENV)
+        # Rolled back: the state itself never moved.
+        self.assertEqual(self.store.get_invocation("inv-1")["state"], "reserved")
+        self.assertFalse(any(SECRET in e for e in self._events()))
+        self.assert_nowhere()
+
+    def test_secret_in_transition_is_refused(self):
+        with self.assertRaisesRegex(S.StoreError, "FAKE_API_TOKEN"):
+            self.store.transition("inv-1", ("reserved",), "spawning", env=ENV,
+                                  detail={"reason": f"boom {SECRET}"})
+        self.assertEqual(self.store.get_invocation("inv-1")["state"], "reserved")
+        self.assertFalse(any(SECRET in e for e in self._events()))
+        self.assert_nowhere()
+
+    def test_secret_in_record_if_null_fields_is_refused(self):
+        with self.assertRaisesRegex(S.StoreError, "FAKE_API_TOKEN"):
+            self.store.record_if_null("inv-1", "launch:supervisor_spawned", env=ENV,
+                                      native_run_id=f"run-{SECRET}")
+        self.assertIsNone(self.store.get_invocation("inv-1")["native_run_id"])
+        self.assertFalse(any(SECRET in e for e in self._events()))
+        self.assert_nowhere()
+
+    def test_secret_in_request_cancel_is_refused_and_cancel_not_recorded(self):
+        with self.assertRaisesRegex(S.StoreError, "FAKE_API_TOKEN"):
+            self.store.request_cancel("inv-1", {"reason": f"stop {SECRET}"}, env=ENV)
+        # Rolled back: no cancel_requested_at, no cancel:requested event.
+        self.assertIsNone(self.store.get_invocation("inv-1")["cancel_requested_at"])
+        self.assertFalse(any("cancel:requested" in e for e in self._events()))
+        self.assert_nowhere()
+
+    def test_secret_in_cancel_reason_is_refused_through_recovery_cancel(self):
+        # recovery.cancel(reason=...) is the owner-facing path that reaches
+        # request_cancel; before the fix the cancel:requested event carried
+        # the reason verbatim (the adapter result was redacted at
+        # recovery.py, but the request event was written first, unredacted).
+        import time
+        from ains_runtime import recovery as R
+        with mock.patch.object(R, "reconcile", side_effect=lambda *a, **k: {
+                "terminal": False, "state": "running", "lifecycle": "running",
+                "cancel_requested_at": None}):
+            with self.assertRaisesRegex(S.StoreError, "FAKE_API_TOKEN"):
+                R.cancel(self.store, "inv-1", reason=f"stop {SECRET}", env=ENV)
+        self.assertIsNone(self.store.get_invocation("inv-1")["cancel_requested_at"])
+        self.assertFalse(any(SECRET in e for e in self._events()))
+        self.assert_nowhere()
+
+    def test_clean_events_still_record_with_env_given(self):
+        # The guard must not over-refuse: a secret-free detail records fine
+        # through every wrapper even with env handed in.
+        self.store.set_invocation_state("inv-1", "spawning", env=ENV,
+                                        detail={"why": "ordinary reason"})
+        self.store.transition("inv-1", ("spawning",), "running", env=ENV,
+                              detail={"reason": "engine up"})
+        self.store.record_if_null("inv-1", "launch:supervisor_spawned", env=ENV,
+                                  supervisor_pid=424242, supervisor_start="x")
+        self.store.request_cancel("inv-1", {"reason": "owner asked"}, env=ENV)
+        self.assertEqual(self.store.get_invocation("inv-1")["state"], "running")
+        self.assertIsNotNone(self.store.get_invocation("inv-1")["cancel_requested_at"])
+        self.assertEqual(self.store.get_invocation("inv-1")["supervisor_pid"], 424242)
+        evs = [e["event"] for e in self.store.list_events(entity_id="inv-1")]
+        for ev in ("state:spawning", "state:running", "launch:supervisor_spawned",
+                   "cancel:requested"):
+            self.assertIn(ev, evs)
         self.assert_nowhere()
 
 

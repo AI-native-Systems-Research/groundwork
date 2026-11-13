@@ -6,7 +6,9 @@ chosen by the PromQL text. Nothing here talks to a real cluster.
 """
 import json
 import os
+import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -17,6 +19,7 @@ import unittest
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "skills/investigation/scripts"
@@ -39,6 +42,8 @@ def fixture_for(promql: str) -> tuple[int, bytes]:
         return 400, (FIX / "query_range-error.json").read_bytes()
     if "huge_int" in promql:
         return 200, (FIX / "query_range-huge_int.json").read_bytes()
+    if "huge_ts" in promql:
+        return 200, (FIX / "query_range-huge_ts.json").read_bytes()
     return 200, (FIX / "query_range-vllm_running.json").read_bytes()
 
 
@@ -379,6 +384,461 @@ class TestStep(Base):
             capture_prom.parse_port_forward("ns/svc")
 
 
+class TestParsers(unittest.TestCase):
+    """In-process tests for the parse helpers' rejection branches (the CLI
+    tests in TestStep only drive the happy path and the two big failures)."""
+
+    def err(self, fn, *args, **kw):
+        with self.assertRaises(capture_prom.CaptureError) as cm:
+            fn(*args, **kw)
+        return str(cm.exception)
+
+    def test_parse_time_rejects_garbage_and_missing_tz(self):
+        self.assertIn("not an RFC 3339 time", self.err(capture_prom.parse_time,
+                                                       "not-a-time", "--start"))
+        self.assertIn("needs a timezone", self.err(capture_prom.parse_time,
+                                                   "2025-11-01T00:00:00", "--start"))
+        # 'z' lowercase is accepted and normalized to UTC.
+        self.assertEqual(capture_prom.parse_time("2025-11-01T00:00:00z", "--start"),
+                         capture_prom.parse_time("2025-11-01T00:00:00Z", "--start"))
+
+    def test_parse_step_rejects_gaps_and_non_positive(self):
+        # A gap between durations is not a duration ("1mX30s").
+        self.assertIn("not a duration", self.err(capture_prom.parse_step, "1mX30s"))
+        self.assertIn("not a duration", self.err(capture_prom.parse_step, "-5s"))
+        self.assertIn("must be positive", self.err(capture_prom.parse_step, "-5"))
+        self.assertIn("must be positive", self.err(capture_prom.parse_step, "0"))
+        self.assertIn("must be positive", self.err(capture_prom.parse_step, "inf"))
+
+    def test_suggest_step_beyond_the_ladder_rounds_to_days(self):
+        # A window longer than ladder-max 86400s * 11000 needs a step the
+        # ladder cannot supply: the suggestion becomes a whole number of days.
+        dur = 86400 * capture_prom.MAX_POINTS_PER_SERIES * 3 + 3600
+        self.assertEqual(capture_prom.suggest_step(dur), 86400 * 4)
+
+    def test_parse_url_rejects_scheme_query_fragment_and_brackets_ipv6(self):
+        self.assertIn("http(s) URL", self.err(capture_prom.parse_url, "ftp://h"))
+        self.assertIn("http(s) URL", self.err(capture_prom.parse_url, "http://"))
+        self.assertIn("query string or fragment", self.err(capture_prom.parse_url,
+                                                           "http://h/?x=1"))
+        self.assertIn("query string or fragment", self.err(capture_prom.parse_url,
+                                                           "http://h/#frag"))
+        # An explicit port is included verbatim; without one, a literal-IPv6
+        # host keeps its brackets (the bracketing branch).
+        base, host = capture_prom.parse_url("http://[::1]/prom")
+        self.assertEqual((base, host), ("http://[::1]/prom", "[::1]"))
+
+    def test_parse_port_forward_rejects_bad_ports(self):
+        for spec in ("ctx/ns/svc:0", "ctx/ns/svc:99999", "ctx/ns/svc:x", "ctx/ns/:9090",
+                     "ctx/ns/svc:"):
+            with self.subTest(spec=spec):
+                self.assertIn("bad service port",
+                              self.err(capture_prom.parse_port_forward, spec))
+
+    def test_size_guard_env_validation(self):
+        self.assertEqual(capture_prom.size_guard(), _telemetry.SIZE_GUARD_BYTES)
+        with mock.patch.dict(os.environ, {"INVESTIGATION_SIZE_GUARD_BYTES": "100"}):
+            self.assertEqual(capture_prom.size_guard(), 100)
+        with mock.patch.dict(os.environ, {"INVESTIGATION_SIZE_GUARD_BYTES": ""}):
+            self.assertEqual(capture_prom.size_guard(), _telemetry.SIZE_GUARD_BYTES)
+        with mock.patch.dict(os.environ, {"INVESTIGATION_SIZE_GUARD_BYTES": "ten"}):
+            self.assertIn("must be an integer", self.err(capture_prom.size_guard))
+
+
+class TestQueryMap(unittest.TestCase):
+    """load_queries / check_query_map validation against tempdir files."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="capture-prom-qmap-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def write(self, name, text):
+        p = self.tmp / name
+        p.write_text(textwrap.dedent(text))
+        return p
+
+    def err(self, fn, *args):
+        with self.assertRaises(capture_prom.CaptureError) as cm:
+            fn(*args)
+        return str(cm.exception)
+
+    def test_missing_file(self):
+        self.assertIn("no such file",
+                      self.err(capture_prom.load_queries, self.tmp / "nope.yaml", "--queries"))
+
+    def test_unparseable_yaml(self):
+        p = self.write("bad.yaml", "a: [unclosed\n")
+        self.assertIn("--queries", self.err(capture_prom.load_queries, p, "--queries"))
+
+    def test_empty_file_gives_no_queries(self):
+        p = self.write("empty.yaml", "")
+        self.assertEqual(capture_prom.load_queries(p, "--queries"), {})
+
+    def test_check_query_map_rejections(self):
+        e = self.err(capture_prom.check_query_map, ["not", "a", "map"], "where")
+        self.assertIn("flat", e)
+        e = self.err(capture_prom.check_query_map, {"bad name!": "up"}, "where")
+        self.assertIn("must match", e)
+        e = self.err(capture_prom.check_query_map, {"q": 5}, "where")
+        self.assertIn("non-empty PromQL", e)
+        e = self.err(capture_prom.check_query_map, {"q": "  "}, "where")
+        self.assertIn("non-empty PromQL", e)
+        # Values are stripped on the way through.
+        self.assertEqual(capture_prom.check_query_map({"q": " up(1) \n"}, "where"),
+                         {"q": "up(1)"})
+
+
+class TestHttpResponseClassification(Base):
+    """query_range's four malformed-response branches: the fake server answers
+    the query named `bad` with each malformed shape and every other query with
+    the recorded success fixture, so the capture is written (a partial failure,
+    not a total one) and the classified error lands in capture.json."""
+
+    # mode -> (status, body): served to the query named `bad`.
+    MODES = {
+        # HTTPError with a non-JSON body.
+        "http_nonjson": (500, b"<html>gateway error</html>"),
+        # HTTPError whose body IS JSON but says nothing about status (a proxy's
+        # 502 payload): falls through to the plain "HTTP <code>" error.
+        "http_json_no_status": (502, b'{"upstream": "unavailable"}'),
+        # 200 whose body is not JSON at all.
+        "ok_nonjson": (200, b"<html>login page</html>"),
+        # 200 with JSON that is not an object.
+        "ok_nonobject": (200, b'["a", "list"]'),
+        # 200 with a JSON object that says status: error.
+        "ok_error": (200, b'{"status":"error","errorType":"execution",'
+                           b'"error":"query timed out"}'),
+    }
+
+    BAD = "does_not_exist"       # the fixture handler answers this with an empty result
+
+    def capture(self, mode):
+        q = self.tmp / "q.yaml"
+        q.write_text(f"good: vllm_running\n{self.BAD}: up(1)\n")
+        status, body = self.MODES[mode]
+        handler = self.handler_for(status, body)
+        with FakeServer(handler) as p:
+            r = self.run_cli("--url", p.url, "--queries", str(q))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"failed: {self.BAD}", r.stdout)
+        return json.loads((self.cap_dir() / "capture.json").read_text())
+
+    @staticmethod
+    def handler_for(status, body):
+        ok = (FIX / "query_range-vllm_running.json").read_bytes()
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                form = urllib.parse.parse_qs(self.rfile.read(n).decode())
+                if "vllm_running" in form["query"][0]:
+                    code, out = 200, ok
+                else:
+                    code, out = status, body
+                self.send_response(code)
+                self.send_header("Content-Type", "text/html" if b"<" in out
+                                 else "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+        return H
+
+    def test_http_error_with_non_json_body(self):
+        cap = self.capture("http_nonjson")
+        self.assertIn("HTTP 500", cap["failed_queries"][self.BAD])
+        # No raw body to keep for this query: only the good one is under prom/.
+        self.assertEqual([p.name for p in (self.cap_dir() / "prom").iterdir()],
+                         ["good.json"])
+
+    def test_http_error_with_json_body_that_is_not_an_error(self):
+        cap = self.capture("http_json_no_status")
+        self.assertIn("HTTP 502", cap["failed_queries"][self.BAD])
+        # No raw body is kept: the JSON body did not say status=error.
+        self.assertEqual([p.name for p in (self.cap_dir() / "prom").iterdir()],
+                         ["good.json"])
+
+    def test_ok_non_json_body(self):
+        cap = self.capture("ok_nonjson")
+        self.assertIn("not JSON", cap["failed_queries"][self.BAD])
+        self.assertIn("auth proxy", cap["failed_queries"][self.BAD])
+
+    def test_ok_non_object_json(self):
+        cap = self.capture("ok_nonobject")
+        self.assertIn("not a JSON object", cap["failed_queries"][self.BAD])
+
+    def test_ok_error_status_body(self):
+        cap = self.capture("ok_error")
+        self.assertIn("execution", cap["failed_queries"][self.BAD])
+        self.assertIn("timed out", cap["failed_queries"][self.BAD])
+        # The body IS valid JSON: it is kept byte-for-byte as evidence.
+        self.assertEqual((self.cap_dir() / "prom" / f"{self.BAD}.json").read_bytes(),
+                         self.MODES["ok_error"][1])
+
+    def test_error_message_is_redacted(self):
+        # A token-shaped substring inside the server's error text must be
+        # redacted before it reaches capture.json (query_range redacts the
+        # classification, run() redacts the printed line).
+        token = "leaky-TOKEN-value"
+        body = (b'{"status":"error","errorType":"exec","error":"boom '
+                + token.encode() + b'"}')
+        q = self.tmp / "q.yaml"
+        q.write_text(f"good: vllm_running\n{self.BAD}: up(1)\n")
+        handler = self.handler_for(200, body)
+        env = {**self.env, "PROM_TOKEN": token}
+        with FakeServer(handler) as p:
+            r = self.run_cli("--url", p.url, "--queries", str(q),
+                             "--token-env", "PROM_TOKEN", env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cap = json.loads((self.cap_dir() / "capture.json").read_text())
+        self.assertNotIn(token, cap["failed_queries"][self.BAD])
+        self.assertIn("***", cap["failed_queries"][self.BAD])
+        self.assertNotIn(token, r.stdout + r.stderr)
+        self.assertNotIn(token, (self.cap_dir() / "capture.json").read_text())
+
+
+class TestRunGuards(Base):
+    """run()'s argument and environment guards, via the CLI (exit code 2)."""
+
+    def test_study_must_be_a_directory(self):
+        r = self.run_cli("--url", "http://127.0.0.1:9",
+                         "--study", str(self.tmp / "nope"))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("not a directory", r.stderr)
+
+    def test_capture_id_must_match_name_re(self):
+        r = self.run_cli("--url", "http://127.0.0.1:9", cid="bad id!")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("--capture-id", r.stderr)
+
+    def test_end_must_be_after_start(self):
+        r = subprocess.run([sys.executable, str(SCRIPT), "--study", str(self.study),
+                            "--capture-id", "c1", "--start", END, "--end", START,
+                            "--url", "http://127.0.0.1:9"],
+                           capture_output=True, text=True, env=self.env, timeout=60)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("after --start", r.stderr)
+
+    def test_no_queries_to_run(self):
+        q = self.tmp / "empty.yaml"
+        q.write_text("")                     # load_queries: {} -> "no queries"
+        with FakeProm() as p:
+            r = self.run_cli("--url", p.url, "--queries", str(q))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("no queries to run", r.stderr)
+
+    def test_existing_runs_destination_refused(self):
+        # The moved-bulk destination under the runs dir is as frozen as the
+        # capture dir itself: a pre-existing one refuses before any query.
+        dest = self.runs / "_no-repo" / "demo-study" / "telemetry-c1"
+        dest.mkdir(parents=True)
+        dest.joinpath("sentinel").write_text("x")
+        with FakeProm() as p:
+            r = self.run_cli("--url", p.url)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("already exists", r.stderr)
+        self.assertIn("pick a new --capture-id", r.stderr)
+
+    def test_unparseable_repo_config(self):
+        top = self.tmp / "repo"
+        self.study = top / "investigations" / "s1"
+        self.study.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(top)], check=True)
+        (top / "investigations/config.yaml").write_text("tracking: [unclosed\n")
+        env = {**self.env, "GIT_CEILING_DIRECTORIES": ""}
+        with FakeProm() as p:
+            r = self.run_cli("--url", p.url, env=env)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("repo config", r.stderr)
+
+    def test_bad_size_guard_env(self):
+        env = {**self.env, "INVESTIGATION_SIZE_GUARD_BYTES": "ten"}
+        with FakeProm() as p:
+            r = self.run_cli("--url", p.url, env=env)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("must be an integer", r.stderr)
+
+
+class FakeServer:
+    """A bare ThreadingHTTPServer with a caller-supplied handler class."""
+
+    def __init__(self, handler):
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
+        self.t = threading.Thread(target=self.srv.serve_forever, daemon=True)
+
+    def __enter__(self):
+        self.t.start()
+        return self
+
+    def __exit__(self, *a):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+class TestOtelLines(unittest.TestCase):
+    def test_non_float_and_nan_values_are_skipped(self):
+        doc = {"data": {"result": [
+            {"metric": {"pod": "a"}, "values": [[1, "3"], [2, "NaN"], [3, "N/A"],
+                                                [4, None], [5, "5"]]}]}}
+        lines = list(capture_prom.otel_lines("cap-1", "q", "up(1)", doc))
+        self.assertEqual(len(lines), 1)
+        pts = json.loads(lines[0])["resourceMetrics"][0]["scopeMetrics"][0] \
+            ["metrics"][0]["gauge"]["dataPoints"]
+        self.assertEqual([p["asDouble"] for p in pts], [3.0, 5.0])
+        attrs = {a["key"]: a["value"]["stringValue"]
+                 for a in json.loads(lines[0])["resourceMetrics"][0]["resource"]["attributes"]}
+        self.assertEqual(attrs["investigation.capture_id"], "cap-1")
+        self.assertEqual(attrs["investigation.query_name"], "q")
+
+
+class FakeProc:
+    """A PortForward.close() target that behaves like a wedged or dead
+    subprocess.Popen without being one. `term_works` decides whether a
+    delivered signal ends the wait (a real kubectl usually exits on SIGTERM)."""
+
+    def __init__(self, pid, *, term_works=True):
+        self.pid = pid
+        self.term_works = term_works
+        self._alive = True
+        self.signals = []
+
+    def poll(self):
+        return None if self._alive else 0
+
+    def wait(self, timeout=None):
+        if self._alive:
+            raise subprocess.TimeoutExpired(cmd="kubectl", timeout=timeout)
+        return 0
+
+    def send_signal(self, sig):
+        self.signals.append(sig)
+        if self.term_works:
+            self._alive = False
+
+    def kill(self):
+        self.signals.append("kill")
+        self._alive = False
+
+
+class TestPortForwardTeardown(unittest.TestCase):
+    def make_pf(self, proc):
+        pf = capture_prom.PortForward({"context": "c", "namespace": "n",
+                                       "service": "s", "port": 1})
+        pf.proc = proc
+        pf.log = tempfile.TemporaryFile()
+        self.addCleanup(pf.log.close)
+        return pf
+
+    def test_missing_kubectl_is_a_clean_error(self):
+        pf = capture_prom.PortForward({"context": "c", "namespace": "n",
+                                       "service": "s", "port": 1})
+        with mock.patch.object(capture_prom.shutil, "which", return_value=None):
+            with self.assertRaises(capture_prom.CaptureError) as cm:
+                pf.__enter__()
+        self.assertIn("kubectl on PATH", str(cm.exception))
+
+    def test_close_falls_back_to_send_signal_when_the_group_is_gone(self):
+        # killpg raises ProcessLookupError (the process group leader died and
+        # the pid lingers): close() signals the process itself instead.
+        proc = FakeProc(pid=99999999)
+        pf = self.make_pf(proc)
+
+        def killpg(pid, sig):
+            raise ProcessLookupError()
+
+        with mock.patch.object(capture_prom.os, "killpg", side_effect=killpg):
+            pf.close()
+        self.assertEqual(proc.signals, [signal.SIGTERM])  # reached the process
+
+    def test_close_escalates_to_sigkill_when_term_times_out(self):
+        # The process ignores every delivered signal and never exits: the
+        # signal loop's SIGTERM wait times out, the loop continues to SIGKILL,
+        # and the straggler path still tries killpg before p.kill().
+        proc = FakeProc(pid=99999999, term_works=False)
+        pf = self.make_pf(proc)
+        seen = []
+
+        def killpg(pid, sig):
+            seen.append(sig)
+            if sig == signal.SIGKILL:
+                proc._alive = False     # the SIGKILL lands
+            return None
+
+        with mock.patch.object(capture_prom.os, "killpg", side_effect=killpg):
+            pf.close()
+        # SIGTERM and SIGKILL both went to the group; p.kill() was not needed.
+        self.assertEqual(seen, [signal.SIGTERM, signal.SIGKILL, signal.SIGKILL])
+        self.assertNotIn("kill", proc.signals)
+
+    def test_close_kills_the_process_directly_as_a_last_resort(self):
+        # Both killpg calls raise (gone entirely): the direct p.kill() runs.
+        proc = FakeProc(pid=99999999, term_works=False)
+        pf = self.make_pf(proc)
+
+        def killpg(pid, sig):
+            raise ProcessLookupError()
+
+        with mock.patch.object(capture_prom.os, "killpg", side_effect=killpg):
+            pf.close()
+        # SIGTERM via send_signal (loop), SIGKILL via send_signal (loop), then
+        # the straggler killpg failed again -> p.kill() + p.wait().
+        self.assertEqual(proc.signals, [signal.SIGTERM, signal.SIGKILL, "kill"])
+
+    def test_close_survives_a_vanished_process(self):
+        # The process disappears between killpg failing and send_signal:
+        # close() must swallow the ProcessLookupError and keep tearing down.
+
+        class Vanished(FakeProc):
+            def send_signal(self, sig):
+                self.signals.append(sig)
+                raise ProcessLookupError()
+
+            def kill(self):
+                self.signals.append("kill")
+                self._alive = False
+
+        proc = Vanished(pid=99999999, term_works=False)
+        pf = self.make_pf(proc)
+
+        def killpg(pid, sig):
+            raise ProcessLookupError()
+
+        with mock.patch.object(capture_prom.os, "killpg", side_effect=killpg):
+            pf.close()
+        # The signal loop's p.wait() timed out after both signals vanished,
+        # then the straggler path fell through to p.kill().
+        self.assertEqual(proc.signals, [signal.SIGTERM, signal.SIGKILL, "kill"])
+
+    def test_exit_runs_the_same_teardown_as_close(self):
+        # PortForward is a context manager: __exit__ must tear the forward
+        # down even when no exception is propagating.
+        proc = FakeProc(pid=99999999)
+        pf = self.make_pf(proc)
+        with mock.patch.object(capture_prom.os, "killpg") as killpg:
+            killpg.return_value = None
+            proc._alive = False        # already exited: killpg does the work
+            pf.__exit__(None, None, None)
+        self.assertEqual(proc.signals, [])        # nothing signalled directly
+        self.assertEqual(killpg.call_count, 1)    # only the straggler pass
+        self.assertIsNone(pf.log)                 # log handle was closed
+
+    def test_tail_reports_no_output_on_unreadable_log(self):
+        pf = self.make_pf(FakeProc(pid=99999999))
+
+        class Broken:
+            def seek(self, *a):
+                raise OSError()
+
+            def read(self, *a):
+                raise OSError()
+
+        pf.log = Broken()
+        self.assertEqual(pf._tail(), "(no output)")
+
+
 class TestTokenLeak(Base):
     def test_token_never_on_disk_or_output(self):
         env = {**self.env, "PROM_TOKEN": TOKEN, "INVESTIGATION_SIZE_GUARD_BYTES": "1"}
@@ -413,6 +873,71 @@ class TestTokenLeak(Base):
                     n += 1
                     self.assertNotIn(TOKEN.encode(), f.read_bytes(), f)
         self.assertGreater(n, 3)
+
+    def test_failed_query_raw_body_is_redacted(self):
+        # The one path that used to bypass redact(): run() writes the raw HTTP
+        # body byte-for-byte even when the query FAILED, and an error body can
+        # echo the Authorization header (a misbehaving gateway). The written
+        # prom/<name>.json must not carry the token; the body is still kept as
+        # evidence, with just the secret masked.
+        token = "echoed-TOKEN-value-9f1c2b"
+        q = self.tmp / "q.yaml"
+        q.write_text("good: vllm_running\nbad: syntax_error(\n")
+        body = (b'{"status":"error","errorType":"bad_data","error":"bad query; '
+                b"your Authorization header was Bearer " + token.encode() + b'"}')
+        seen = []
+
+        class EchoAuth(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                form = urllib.parse.parse_qs(self.rfile.read(n).decode())
+                seen.append(self.headers.get("Authorization"))
+                if "vllm_running" in form["query"][0]:
+                    code, out = 200, (FIX / "query_range-vllm_running.json").read_bytes()
+                else:
+                    code, out = 400, body
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), EchoAuth)
+        th = threading.Thread(target=srv.serve_forever, daemon=True)
+        th.start()
+        try:
+            env = {**self.env, "PROM_TOKEN": token}
+            r = self.run_cli("--url", f"http://127.0.0.1:{srv.server_address[1]}",
+                             "--token-env", "PROM_TOKEN", "--queries", str(q), env=env)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"Bearer {token}", seen)                  # token sent
+        self.assertNotIn(token, r.stdout + r.stderr)
+        # The failed query's raw body is written (evidence), but redacted.
+        raw = (self.cap_dir() / "prom/bad.json").read_bytes()
+        self.assertIn(b'"errorType":"bad_data"', raw)          # still evidence
+        self.assertNotIn(token.encode(), raw)                   # token masked
+        self.assertIn(b"Bearer ***", raw)
+        self.assertIn(token, json.loads(body)["error"])         # server did echo it
+        # And not just the literal token: no bearer-token-shaped material
+        # survives anywhere in the raw body (only "Bearer ***").
+        self.assertIsNone(re.search(rb"Bearer\s+[A-Za-z0-9][A-Za-z0-9_.\-]{6,}", raw))
+        # The good query's raw body stays byte-for-byte.
+        self.assertEqual((self.cap_dir() / "prom/good.json").read_bytes(),
+                         (FIX / "query_range-vllm_running.json").read_bytes())
+        # summary.json / capture.json never see the token either, and no file
+        # anywhere under the study or the runs dir carries it.
+        self.assertNotIn(token, (self.cap_dir() / "summary.json").read_text())
+        self.assertNotIn(token, (self.cap_dir() / "capture.json").read_text())
+        for root in (self.study, self.runs):
+            for f in root.rglob("*"):
+                if f.is_file():
+                    self.assertNotIn(token.encode(), f.read_bytes(), f)
 
     def test_missing_token_env_fails_cleanly(self):
         env = {k: v for k, v in self.env.items() if k != "PROM_TOKEN"}
@@ -475,6 +1000,100 @@ class TestRepoConfig(Base):
         self.assertGreater(len(d), 20)
         self.assertEqual(capture_prom.check_query_map(d, "starter"), {k: v.strip() for k, v in d.items()})
         self.assertNotIn("by (decision)", " ".join(d.values()))
+
+
+class TestBadTimestamps(Base):
+    """Sample timestamps that cannot become timeUnixNano must be dropped, not fatal.
+
+    otel_lines converts each sample's ts with int(round(float(ts) * 1000)) —
+    outside any guard until this fix. Every form below raised and killed the
+    whole capture mid-write (after prom/ was created): a huge-int ts
+    (json.loads parses a >308-digit bare decimal back as a Python int, and
+    float(int) raises OverflowError), an over-range string ts ("1e999" ->
+    float gives inf -> int(round(inf)) raises OverflowError — the case the
+    value guard does not cover, since float() itself succeeds), and a NaN
+    string ts (int(round(nan)) raises ValueError). A finite ts whose *1000
+    multiply overflows (1e306) is the fourth form. summary.json is immune:
+    _telemetry._finite never looks at ts. The value slot's drop-not-crash
+    treatment (PR #39 for values; 6f72438 / PR #37 for the same class in
+    other scripts) is extended to the ts slot (supervisor b1b122f5)."""
+
+    def test_otel_lines_skips_bad_ts_and_keeps_finite_siblings(self):
+        big = 10 ** 400
+        # Reachability pins: the JSON round-trip delivers the int form, and
+        # json.loads parses a bare over-range number as a float inf.
+        self.assertIsInstance(json.loads(json.dumps({"ts": big}))["ts"], int)
+        self.assertEqual(json.loads("[1e999]")[0], float("inf"))
+        for bad_ts in (big, "1e999", "nan", None, "junk", 1e306, float("inf")):
+            doc = {"data": {"result": [{"metric": {"pod": "p"},
+                                        "values": [[bad_ts, 1.0], [1762336830, 5.0]]}]}}
+            lines = list(capture_prom.otel_lines("c1", "q", "promql", doc))
+            self.assertEqual(len(lines), 1, bad_ts)
+            pts = json.loads(lines[0])["resourceMetrics"][0]["scopeMetrics"][0][
+                "metrics"][0]["gauge"]["dataPoints"]
+            self.assertEqual(pts, [{"timeUnixNano": "1762336830000000000",
+                                    "asDouble": 5.0}], bad_ts)
+        # The line is still emitted for a series whose every ts is bad.
+        doc = {"data": {"result": [{"metric": {"pod": "p"},
+                                    "values": [[big, 1.0]]}]}}
+        lines = list(capture_prom.otel_lines("c1", "q", "promql", doc))
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(json.loads(lines[0])["resourceMetrics"][0]["scopeMetrics"][0]
+                         ["metrics"][0]["gauge"]["dataPoints"], [])
+        # Normal timestamps are untouched (main-parity spot check, incl. the
+        # string form and a float ts with a fractional second).
+        raw = json.loads((FIX / "query_range-vllm_running.json").read_text())
+        self.assertEqual(len(list(capture_prom.otel_lines("c1", "running", "q", raw))), 2)
+        doc = {"data": {"result": [{"metric": {"pod": "p"},
+                                    "values": [["1762336830", 1.0], [1762336830.5, 2.0]]}]}}
+        pts = json.loads(list(capture_prom.otel_lines("c1", "q", "p", doc))[0])
+        self.assertEqual(pts["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]
+                         ["gauge"]["dataPoints"],
+                         [{"timeUnixNano": "1762336830000000000", "asDouble": 1.0},
+                          {"timeUnixNano": "1762336830500000000", "asDouble": 2.0}])
+
+    def test_capture_with_bad_ts_succeeds(self):
+        # End-to-end: the fake server answers one query with the bad-ts
+        # fixture (huge int, over-range string, NaN string — one series each,
+        # finite siblings kept). Before the fix this died mid-write with a raw
+        # OverflowError traceback (after prom/ was created), leaving a
+        # half-written capture; it must instead record the capture with the
+        # unrepresentable points dropped and their values still in summary.
+        q = self.tmp / "q.yaml"
+        q.write_text("huge: sum by (pod) (vllm:huge_ts_metric)\n")
+        with FakeProm() as p:
+            r = self.run_cli("--url", p.url, "--queries", str(q))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = self.cap_dir()
+        # The raw response is kept byte-for-byte, bad timestamps included.
+        self.assertEqual((d / "prom/huge.json").read_bytes(),
+                         (FIX / "query_range-huge_ts.json").read_bytes())
+        # summary.json is ts-blind: every value is counted (3 + 2 + 2 points).
+        s = json.loads((d / "summary.json").read_text())["queries"]["huge"]
+        self.assertEqual(s["overall"]["n_points"], 7)
+        self.assertEqual(s["overall"]["n_series"], 3)
+        self.assertEqual([x["n_points"] for x in s["series"]], [3, 2, 2])
+        # metrics.jsonl: one line per series, the three bad-ts points absent,
+        # the seven finite points present with correct nanosecond slots.
+        lines = (d / "metrics.jsonl").read_text().splitlines()
+        self.assertEqual(len(lines), 3)
+        by_pod = {}
+        for l in lines:
+            rec = json.loads(l)
+            attrs = {a["key"]: a["value"]["stringValue"]
+                     for a in rec["resourceMetrics"][0]["resource"]["attributes"]}
+            by_pod[attrs["pod"]] = rec["resourceMetrics"][0]["scopeMetrics"][0][
+                "metrics"][0]["gauge"]["dataPoints"]
+        self.assertEqual(by_pod["vllm-decode-0"],
+                         [{"timeUnixNano": "1762336830000000000", "asDouble": 8.0},
+                          {"timeUnixNano": "1762336860000000000", "asDouble": 9.0}])
+        self.assertEqual(by_pod["vllm-decode-1"],
+                         [{"timeUnixNano": "1762336830000000000", "asDouble": 6.0}])
+        self.assertEqual(by_pod["vllm-decode-2"],
+                         [{"timeUnixNano": "1762336830000000000", "asDouble": 4.0}])
+        # The unrepresentable timestamps never land in the OTel output.
+        self.assertNotIn(str(10 ** 400), (d / "metrics.jsonl").read_text())
+        self.assertNotIn("1e999", (d / "metrics.jsonl").read_text())
 
 
 STUB_SERVER = textwrap.dedent('''\

@@ -13,7 +13,8 @@ mode. Schema v1 tables:
                 index on material_digest stops two equivalent invocations
                 unless one is an explicit repeat
   events        append-only lifecycle log (UPDATE/DELETE are refused by
-                triggers)
+                triggers); every write path checks the detail for secret
+                values when given env and refuses the transaction otherwise
 
 Every state change runs inside `with store.tx():` which issues BEGIN
 IMMEDIATE, so two writers serialize before reading the state they act on.
@@ -239,8 +240,17 @@ class Store:
 
     def add_event(self, entity: str, entity_id: str, event: str, *,
                   work_id: str | None = None, detail: dict | None = None,
-                  at: str | None = None) -> None:
-        """Append one event. Call inside tx()."""
+                  at: str | None = None, env: Mapping[str, str] | None = None) -> None:
+        """Append one event. Call inside tx().
+
+        The detail must be secret-free when `env` is given: like every other
+        write (messages, preparations, approvals, invocation_event), a secret
+        value in an event is refused with StoreError so the transaction rolls
+        back — never redacted-and-kept, which would make the append-only
+        events log the one table a leaked value can never be scrubbed from.
+        """
+        if env is not None:
+            _no_secrets(detail or {}, f"event {event}", env)
         self.conn.execute(
             "INSERT INTO events(at, entity, entity_id, work_id, event, detail_json)"
             " VALUES (?,?,?,?,?,?)",
@@ -626,8 +636,12 @@ class Store:
                          "native_json", "cancel_requested_at", "ended_at")
 
     def set_invocation_state(self, inv_id: str, state: str, *,
-                             detail: dict | None = None, **fields: Any) -> None:
-        """Transition an invocation and record identity fields (R3)."""
+                             detail: dict | None = None, env: Mapping[str, str] | None = None,
+                             **fields: Any) -> None:
+        """Transition an invocation and record identity fields (R3).
+
+        With `env`, the recorded detail (and fields) must be secret-free
+        (see add_event); the transition is refused, not redacted."""
         bad = set(fields) - set(self.INVOCATION_FIELDS)
         if bad:
             raise StoreError(f"unknown invocation fields: {sorted(bad)}")
@@ -642,16 +656,19 @@ class Store:
                       f"{', ' + sets if sets else ''} WHERE inv_id = ?",
                       (state, at, *fields.values(), inv_id))
             self.add_event("invocation", inv_id, f"state:{state}", work_id=r["work_id"],
-                           at=at, detail={**(detail or {}), **fields})
+                           at=at, detail={**(detail or {}), **fields}, env=env)
 
     def transition(self, inv_id: str, from_states: tuple[str, ...] | str, state: str, *,
                    detail: dict | None = None, where: Mapping[str, Any] | None = None,
-                   **fields: Any) -> bool:
+                   env: Mapping[str, str] | None = None, **fields: Any) -> bool:
         """Compare-and-set: move inv_id to `state` only if it is in from_states
         (and every column in `where` has the given value). Returns whether
         the transition happened; the event is written only if it did. This
         is how the supervisor, launch, recovery and reconcile avoid acting
-        on a state another process already changed."""
+        on a state another process already changed.
+
+        With `env`, the recorded detail (and fields) must be secret-free
+        (see add_event); the transition is refused, not redacted."""
         if isinstance(from_states, str):
             from_states = (from_states,)
         bad = (set(fields) | set(where or {})) - set(self.INVOCATION_FIELDS)
@@ -672,13 +689,17 @@ class Store:
                       " WHERE inv_id = ?", (state, at, *fields.values(), inv_id))
             self.add_event("invocation", inv_id, f"state:{state}", work_id=r["work_id"],
                            at=at, detail={"from": r["state"], **(detail or {}),
-                                          **fields})
+                                          **fields}, env=env)
             return True
 
-    def record_if_null(self, inv_id: str, event: str, **fields: Any) -> bool:
+    def record_if_null(self, inv_id: str, event: str, *,
+                       env: Mapping[str, str] | None = None, **fields: Any) -> bool:
         """Set identity fields only where ALL of them are still NULL (no state
         change). Used by launch to record the supervisor it spawned, unless
-        the supervisor already recorded itself."""
+        the supervisor already recorded itself.
+
+        With `env`, the recorded fields must be secret-free (see add_event);
+        the write is refused, not redacted."""
         bad = set(fields) - set(self.INVOCATION_FIELDS)
         if bad or not fields:
             raise StoreError(f"unknown invocation fields: {sorted(bad)}")
@@ -693,7 +714,7 @@ class Store:
             c.execute(f"UPDATE invocations SET {sets}, updated_at = ? WHERE inv_id = ?",
                       (*fields.values(), now(), inv_id))
             self.add_event("invocation", inv_id, event, work_id=r["work_id"],
-                           detail=dict(fields))
+                           detail=dict(fields), env=env)
             return True
 
     def invocation_event(self, inv_id: str, event: str, detail: dict | None = None, *,
@@ -708,9 +729,13 @@ class Store:
             self.add_event("invocation", inv_id, event, work_id=r["work_id"],
                            detail=detail)
 
-    def request_cancel(self, inv_id: str, detail: dict | None = None) -> bool:
+    def request_cancel(self, inv_id: str, detail: dict | None = None, *,
+                       env: Mapping[str, str] | None = None) -> bool:
         """Record a cancel request (first one sets cancel_requested_at).
-        Returns True if this call set it. Never a claim that anything stopped."""
+        Returns True if this call set it. Never a claim that anything stopped.
+
+        With `env`, the detail must be secret-free (see add_event): the
+        request is refused, and cancel_requested_at stays unset."""
         with self.tx() as c:
             r = c.execute("SELECT work_id, cancel_requested_at FROM invocations"
                           " WHERE inv_id = ?", (inv_id,)).fetchone()
@@ -722,7 +747,7 @@ class Store:
                 c.execute("UPDATE invocations SET cancel_requested_at = ?, updated_at = ?"
                           " WHERE inv_id = ?", (at, at, inv_id))
             self.add_event("invocation", inv_id, "cancel:requested", work_id=r["work_id"],
-                           at=at, detail={**(detail or {}), "first": first})
+                           at=at, detail={**(detail or {}), "first": first}, env=env)
             return first
 
     def get_invocation(self, inv_id: str) -> dict | None:

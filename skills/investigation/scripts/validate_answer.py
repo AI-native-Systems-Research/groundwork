@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Validate a study's answer.json against the groundwork answer contract.
 
-The contract (docs/answer-contract.md; the mlsys study's contract, also
+The contract (skills/investigation/references/answer-contract.md; the
+mlsys study's contract, also
 adopted by Nous v2's answer.schema.json) allows exactly four top-level
 keys: answer (non-empty string), deliverable (null or an existing path),
 repro (ONE shell command that regenerates the headline numbers), and
@@ -26,8 +27,8 @@ Usage: python3 scripts/validate_answer.py <answer.json> [--root DIR]
        [--check-citations [--repo NAME=PATH ...]]
 --root is the base for resolving RELATIVE evidence and deliverable paths
 (absolute paths are used as-is); it defaults to the parent of the answer
-file's directory, so studies/<slug>/final/answer.json resolves against
-studies/<slug>/ — the study dir.
+file's directory, so investigations/<slug>/final/answer.json resolves
+against investigations/<slug>/ — the study dir.
 
 --check-citations additionally verifies code-citation evidence: for every
 claim whose evidence path is under citations/ (relative to the root), the
@@ -82,10 +83,16 @@ def numeric_forms(v) -> list[str]:
     for integral values, trimmed ("4100") — so a float claim matches an int
     printed in the text and vice versa. A form qualifies only when
     float(form) == value; rounded spellings ("0.3" for 0.347) are never
-    emitted, so they can never false-positive."""
+    emitted, so they can never false-positive. Ints beyond float range
+    (json.loads parses a >308-digit decimal back as int, and float(v)
+    raises OverflowError on them) keep exactly their decimal spelling —
+    the only one the text could carry."""
     if not is_number(v):
         return []
-    f = float(v)
+    try:
+        f = float(v)
+    except OverflowError:            # e.g. 10**400 parsed from JSON
+        return [str(v)]
     s = repr(f)
     forms = [str(v) if isinstance(v, int) else s]
     trimmed = s.rstrip("0").rstrip(".")  # 4100.0 -> "4100" ("." guards the int part)
@@ -101,12 +108,19 @@ def numeric_forms(v) -> list[str]:
 def scalar_matches(scalar, value) -> bool:
     """Does one JSON scalar satisfy the iron rule for `value`? Strings match
     exactly; numbers compare with the Nous v2 tolerances. Bools are not
-    numbers, so JSON true never satisfies a claim of 1."""
+    numbers, so JSON true never satisfies a claim of 1. A comparison
+    involving an int beyond float range (which OverflowErrors inside
+    math.isclose) falls back to exact equality — no huge int can be within
+    rel_tol of a finite value, so the tolerance is moot there."""
     if isinstance(value, str):
         return isinstance(scalar, str) and scalar == value
-    return (is_number(value) and isinstance(scalar, (int, float))
-            and not isinstance(scalar, bool)
-            and math.isclose(value, scalar, rel_tol=REL_TOL, abs_tol=ABS_TOL))
+    if not (is_number(value) and isinstance(scalar, (int, float))
+            and not isinstance(scalar, bool)):
+        return False
+    try:
+        return math.isclose(value, scalar, rel_tol=REL_TOL, abs_tol=ABS_TOL)
+    except OverflowError:            # huge int beyond float range (10**400)
+        return value == scalar
 
 
 def standalone_number_in(text: str, forms) -> bool:
@@ -540,7 +554,8 @@ def main(argv=None) -> int:
         return 2
 
     # Default root: the parent of the answer file's directory, so
-    # studies/<slug>/final/answer.json resolves against studies/<slug>/.
+    # investigations/<slug>/final/answer.json resolves against
+    # investigations/<slug>/.
     root = Path(args.root) if args.root else answer_path.resolve().parent.parent
     root = root.resolve()
 

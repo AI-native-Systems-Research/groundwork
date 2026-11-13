@@ -12,7 +12,8 @@ system, so the skill only runs it after the owner's go.
 
 HTTP is stdlib urllib. PyYAML is used for the query files (F2). The bearer
 token is read from the named env var only; it is never printed, logged, or
-written, and any message that could contain it is redacted first.
+written, and any message or response body that could contain it is redacted
+first.
 
 Exit codes: 0 captured (empty or failed single queries are recorded, not
 fatal); 1 every query failed, or port-forward / network setup failed;
@@ -73,6 +74,18 @@ def redact(s: str) -> str:
         if secret:
             s = s.replace(secret, "***")
     return s
+
+
+def redact_bytes(b: bytes) -> bytes:
+    """redact() for raw response bodies, before they are written to disk.
+
+    An error body can echo the request, token included (a misbehaving gateway,
+    a verbose proxy); the written prom/<name>.json must not carry it.
+    """
+    for secret in _SECRETS:
+        if secret:
+            b = b.replace(secret.encode(), b"***")
+    return b
 
 
 def err(msg: str) -> None:
@@ -365,7 +378,15 @@ def _attr(k: str, v: str) -> dict:
 
 
 def otel_lines(capture_id: str, name: str, promql: str, doc: dict):
-    """One OTLP-JSON MetricsData line per series: {"resourceMetrics": [one record]}."""
+    """One OTLP-JSON MetricsData line per series: {"resourceMetrics": [one record]}.
+
+    A sample whose timestamp cannot be converted to nanoseconds is skipped,
+    like one whose value is not a finite float: OTLP can carry neither. ts
+    hazards: an int beyond float range (json.loads parses a >308-digit JSON
+    number back as a Python int), a float() of over-range/NaN text, and a
+    finite float whose *1000 (ms) multiply overflows — all three raise at the
+    bare conversion instead of degrading. The raw prom/ file keeps every
+    sample either way."""
     for s in (doc.get("data") or {}).get("result") or []:
         labels = dict(s.get("metric") or {})
         attrs = [_attr(k, labels[k]) for k in sorted(labels)]
@@ -379,8 +400,16 @@ def otel_lines(capture_id: str, name: str, promql: str, doc: dict):
                 continue
             if not math.isfinite(x):       # JSON has no NaN; the raw file keeps it
                 continue
-            points.append({"timeUnixNano": str(int(round(float(ts) * 1000)) * 1_000_000),
-                           "asDouble": x})
+            try:
+                # The ts slot has the same hazards as the value slot: an int
+                # beyond float range, a float() of over-range/NaN text, or a
+                # finite float whose *1000 (ms) multiply overflows. OTLP's
+                # int64 timeUnixNano can carry none of them, so the sample is
+                # skipped and kept only in the raw prom/ file.
+                t_ns = str(int(round(float(ts) * 1000)) * 1_000_000)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            points.append({"timeUnixNano": t_ns, "asDouble": x})
         rm = {"resource": {"attributes": attrs},
               "scopeMetrics": [{
                   "scope": {"name": "investigation.capture_prom",
@@ -518,7 +547,11 @@ def run(args) -> int:
     with open(cap_dir / "metrics.jsonl", "w", encoding="utf-8") as mj:
         for name, (raw, doc, error) in results.items():
             if raw is not None:
-                (prom_dir / f"{name}.json").write_bytes(raw)   # byte-for-byte
+                # Byte-for-byte for success bodies. An error body can echo the
+                # request (Authorization included); only the secret is masked.
+                if error is not None:
+                    raw = redact_bytes(raw)
+                (prom_dir / f"{name}.json").write_bytes(raw)
             entry = {"query": queries[name]}
             if error is None:
                 entry.update(summarize_query_range(doc))

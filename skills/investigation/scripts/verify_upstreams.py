@@ -9,8 +9,12 @@ a facts file's verified_against to the new lock id.
     python3 verify_upstreams.py --write-docs    # regenerate method-plan.md's table
 
 Checks:
-  nous, spotlights   the installed engine's git sha equals the locked commit
-                     (doctor's reader: direct_url.json)
+  nous, spotlights,  the installed engine's git sha equals the locked commit
+  sim2real           (doctor's reader: direct_url.json; sim2real via a
+                     configured checkout)
+  vllm, llm-d-router locked as metric-name sources only (see their lock
+                     entries): nothing is installed, so they are reported as
+                     notes, never checked against a machine
   blis binaries      every locked binary under blis_apparatus_root exists and
                      its sha256 matches; every `flags` entry in a representable
                      knob is in that binary's `blis run --help`; knobs with a
@@ -62,7 +66,8 @@ def check_engines(report: dict, machine: dict | None = None) -> None:
     if machine is None:
         machine = _config.load_machine_config()
     pins = doctor.read_pins()
-    for name, engine in (("nous", "nous"), ("spotlights", "spotlights-engine")):
+    for name, engine in (("nous", "nous"), ("spotlights", "spotlights-engine"),
+                         ("sim2real", "sim2real")):
         e = doctor.engine_info(engine, machine, pins, True, {})
         want = U.entry(name)["commit"]
         if not e.get("found"):
@@ -72,6 +77,10 @@ def check_engines(report: dict, machine: dict | None = None) -> None:
                                       f"locked {want[:12]}")
         else:
             report["ok"].append(f"{name}: installed sha equals the lock ({want[:12]})")
+    for name in ("vllm", "llm-d-router"):
+        report["notes"].append(
+            f"{name}: locked as a metric-name source only (facts in "
+            f"{name}.json); nothing to install or check on a machine")
 
 
 def check_blis(report: dict, machine: dict | None = None) -> None:

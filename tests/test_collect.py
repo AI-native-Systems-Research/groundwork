@@ -354,6 +354,53 @@ class HelperTests(unittest.TestCase):
         self.assertFalse(collect.claim_verified({"id": "C7", "metric": "m"}, errors))
         self.assertFalse(collect.claim_verified({"id": "", "metric": ""}, errors))
 
+    def test_named_claim_id_requires_a_digit(self):
+        """A named claim id must carry a digit (every Nous claim id does).
+        The letter-only spelling captured ANY 3+ char word after 'claim':
+        'claim latency:' -> 'latency', 'claim the:' -> 'the', letting the
+        named-id tier decide alone on prose and skip the pointer tier."""
+        self.assertEqual(collect._named_claim_id("claim C1: x.json missing"), "C1")
+        self.assertEqual(collect._named_claim_id("claim C12: x.json missing"), "C12")
+        self.assertEqual(collect._named_claim_id("claim C1N: x.json missing"), "C1N")
+        self.assertIsNone(collect._named_claim_id("claim latency: value not found"))
+        self.assertIsNone(collect._named_claim_id("claim the: value not found"))
+        self.assertIsNone(collect._named_claim_id("no claim prefix here:"))
+
+    def test_claim_verified_prose_word_after_claim_falls_through_to_pointer(self):
+        """Regression (bead 7369261c-a59): 'claim latency: r5.json#p99_ms
+        value mismatch' used to capture the bogus named id 'latency', and
+        that tier decides alone — C5 came back verified=True even though the
+        pointer tier taints it via r5.json. The named id must be real first."""
+        errors = ["claim latency: r5.json#p99_ms value mismatch"]
+        c5 = {"id": "C5", "metric": "p99_ms", "evidence": "nous_evidence/r5.json"}
+        self.assertFalse(collect.claim_verified(c5, errors))
+        # a claim citing another file is untouched by the pointer
+        c9 = {"id": "C9", "metric": "p99_ms", "evidence": "nous_evidence/r9.json"}
+        self.assertTrue(collect.claim_verified(c9, errors))
+
+    def test_attributable_ignores_bare_decimal_literals(self):
+        """The file tier needs a real data extension: the bare 'word.ext'
+        shape also matched decimals ('3.14', '99.9', '2.0'), which made an
+        unattributable error look attributable and let every claim verify."""
+        for literal in ("3.14", "99.9", "2.0", "0.5", "41.8"):
+            self.assertFalse(collect._attributable(f"the run drifted {literal} units"),
+                             literal)
+        # real file-shaped tokens still are
+        for token in ("r5.json", "data/out.csv", "results/R4.txt", "x.jsonl",
+                      "cfg.yaml", "notes.md", "run.log", "script.py", "go.sh"):
+            self.assertTrue(collect._attributable(f"see {token} for detail"), token)
+        # a number glued to a data extension is still a file, not a decimal
+        self.assertTrue(collect._attributable("see results2.json for detail"))
+
+    def test_claim_verified_decimal_literal_error_taints_all(self):
+        """Regression (bead 7369261c-a59): an error carrying only a decimal
+        literal ('the run drifted 3.14 units') came back attributable (the
+        '3.14' read as someone else's file), so C1 verified True instead of
+        being tainted. An error nobody can own must taint EVERY claim."""
+        errors = ["the run drifted 3.14 units"]
+        self.assertFalse(collect.claim_verified({"id": "C1", "metric": "p99_ms"}, errors))
+        self.assertFalse(collect.claim_verified({"id": "", "metric": ""}, errors))
+
     def test_claim_verified_whole_answer_verdicts_taint_no_one(self):
         """The README's whole-answer error families blame the answer's shape,
         not any one claim."""

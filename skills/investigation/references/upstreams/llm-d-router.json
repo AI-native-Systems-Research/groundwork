@@ -1,0 +1,30 @@
+{
+  "_doc": "Facts about llm-d-router at the locked commit. Metric-name source only, like vllm: nothing is installed or launched; the lock exists so the EPP routing/scheduling names in assets/promql/starter.yaml and references/telemetry.md can't drift. The blis lock entry separately records the router version embedded in each BLIS binary (its `router` field). Re-verify every entry when the lock changes.",
+  "_doc_note": "distinct from the per-binary `router` fields in the blis entry: those are the llm-d-router built into each blis apparatus binary (v1.0.0-blis.2 tag and the cc4cc8f6 fork); this entry is the standalone router repo the metric names were checked against",
+  "verified_against": "llm-d-router@7eb682998a8b",
+  "verified_on": "2026-11-13",
+  "facts": {
+    "counters_declared_with_total": {
+      "value": ["request_total", "request_error_total", "scheduler_attempts_total",
+                "disagg_decision_total"],
+      "source": "pkg/epp/metrics/llm_d_router_metrics.go:43 (request_total), :52 (request_error_total), :261 (scheduler_attempts_total); pkg/epp/framework/plugins/scheduling/profilehandler/disagg/metrics.go:60 (disagg_decision_total). client_golang does not append _total, so the exposed names are as-is"
+    },
+    "disagg_label": {
+      "value": "decision_type",
+      "source": "disagg/metrics.go LlmdDisaggDecisionCount labels: plugin_name, plugin_type, model_name, decision_type — there is no `decision` label, so the starter query aggregates by (decision_type)"
+    },
+    "decision_type_labels": {
+      "value": ["decode-only", "prefill-decode", "encode-decode",
+                "encode-prefill-decode"],
+      "source": "disagg/metrics.go DecisionTypeDecodeOnly/PrefillDecode/EncodeDecode/EncodePrefillDecode constants (:32-38), chosen by DisaggDecisionType(encodeUsed, prefillUsed) in disagg_profile_handler.go:358,382"
+    },
+    "queue_size_custom_collector": {
+      "value": "llm_d_epp_per_endpoint_queue_size is a custom-collector Desc (labels name, model_server_endpoint) registered by NewInferencePoolMetricsCollector",
+      "source": "pkg/epp/metrics/llm_d_router_metrics.go; kept in the starter list as a direct-read gauge, not a rate()"
+    },
+    "plugin_duration_labels": {
+      "value": ["extension_point", "plugin_type", "plugin_name"],
+      "source": "pkg/epp/metrics/llm_d_router_metrics.go: llm_d_epp_plugin_duration_seconds labels; the starter query aggregates by (le, plugin_type)"
+    }
+  }
+}
