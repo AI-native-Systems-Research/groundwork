@@ -292,6 +292,42 @@ class NousResults(Mixin, NousBase):
         self.assertEqual(out["grants"], "nothing")
         self.assertEqual(out["record"]["message"]["body"]["invocation_id"], inv)
 
+    def test_secret_in_bundle_only_output_fails_collection_before_merge(self):
+        # The Nous bundle (collect.py's answer_summary, guards, ...) reaches
+        # <study>/collection.json but not Normalized.summary(); before the
+        # fix the secret check ran on the summary only, and only after the
+        # merge — so a secret in answer.json's answer text was merged into
+        # collection.json verbatim. Now the whole raw adapter output is
+        # checked before the merge: the collection fails, nothing is merged.
+        self.env["FAKE_API_TOKEN"] = "sk-planted-results-4f5a6b7c8d9e0f"
+        m = self.submit(self.msg())
+        prep = self.prepare(m["work_id"])
+        rec = self.store.get_preparation(prep.prep_id)["record"]
+        wd = Path(rec["env_set"]["NOUS_CAMPAIGN_PARENT"]) / rec["native_run_id"]
+        shutil.copytree(NOUS_FIX / "workdir-max-iterations", wd)
+        a = json.loads((wd / "answer.json").read_text())
+        a["answer"] = "Partly. leaked sk-planted-results-4f5a6b7c8d9e0f"
+        (wd / "answer.json").write_text(json.dumps(a))
+        inv = self.invoke(prep)
+        with NoLaunch(self):
+            out = RS.collect(self.store, inv, env=self.env, study=self.study)
+        secret = "sk-planted-results-4f5a6b7c8d9e0f"
+        self.assertEqual(out["collection"]["state"], "failed")
+        self.assertEqual(out["collection"]["reason"],
+                         "collection output contained a secret value; not recorded")
+        self.assertIsNone(out["adapter_output"])
+        # Nothing was merged, no secret reached any stored event, the study
+        # or the returned dict.
+        self.assertFalse((self.study / "collection.json").exists())
+        for e in self.store.list_events(entity_id=inv):
+            self.assertNotIn(secret, json.dumps(e))
+        self.assertNotIn(secret, json.dumps(out))
+        self.assertNotIn(secret, (self.study / "collection.json").read_text()
+                         if (self.study / "collection.json").exists() else "")
+        # The native output itself is kept as is (a failed collection changes
+        # nothing else).
+        self.assertIn(secret, (wd / "answer.json").read_text())
+
 
 # --- Spotlights static --------------------------------------------------------------
 

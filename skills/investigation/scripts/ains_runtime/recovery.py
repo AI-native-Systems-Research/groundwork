@@ -173,7 +173,7 @@ def reconcile(store: Store, inv_id: str, *, env: Mapping[str, str] | None = None
                 ev = evidence(store, inv, env)
                 reason = ("the launcher/supervisor is gone and the engine's start was "
                           "never recorded; launch may or may not have happened")
-                store.transition(inv_id, (s,), RECOVERY_REQUIRED,
+                store.transition(inv_id, (s,), RECOVERY_REQUIRED, env=env,
                                  detail={"reason": reason, "evidence": ev,
                                          "relaunch": "never"})
         return view(store, inv_id, env=env)
@@ -206,7 +206,7 @@ def reconcile(store: Store, inv_id: str, *, env: Mapping[str, str] | None = None
     fields = {"native_json": canonical_json(native)}
     if inv.get("ended_at") is None:
         fields["ended_at"] = now()
-    store.transition(inv_id, (EXITED, RUNNING), native["state"],
+    store.transition(inv_id, (EXITED, RUNNING), native["state"], env=env,
                      where={"engine_pid": inv.get("engine_pid")},
                      detail={"reason": native.get("reason"),
                              "native_stop_reason": native.get("native_stop_reason"),
@@ -283,12 +283,12 @@ def cancel(store: Store, inv_id: str, *, interrupt: bool = False,
     first = reconcile(store, inv_id, env=env)
     if first["terminal"] or first["state"] == RECOVERY_REQUIRED:
         store.invocation_event(inv_id, "cancel:not_applicable",
-                               {"state": first["state"], "reason": reason})
+                               {"state": first["state"], "reason": reason}, env=env)
         first["cancel"] = {"requested": False,
                            "note": f"invocation is already {first['state']}; nothing "
                                    "to cancel"}
         return first
-    store.request_cancel(inv_id, {"reason": reason, "interrupt": interrupt})
+    store.request_cancel(inv_id, {"reason": reason, "interrupt": interrupt}, env=env)
     inv = store.get_invocation(inv_id)
     if inv["state"] in (RESERVED, SPAWNING):
         # The supervisor checks the request before spawning; if it is past
@@ -318,7 +318,7 @@ def cancel(store: Store, inv_id: str, *, interrupt: bool = False,
     if leaks:
         result = {"requested": result.get("requested"), "error": "redacted: " +
                   "; ".join(leaks)}
-    store.invocation_event(inv_id, "cancel:result", {"result": result})
+    store.invocation_event(inv_id, "cancel:result", {"result": result}, env=env)
     out = reconcile(store, inv_id, env=env)
     out["cancel"] = {**result, "receipt_only": True,
                      "confirmation": "a cancel request is not proof the engine "
@@ -349,6 +349,7 @@ def mark_not_launched(store: Store, inv_id: str, *, quote: str | None,
             f"{ev['engine_processes']}, supervisor {ev['supervisor_processes']}); "
             "it did launch")
     if not store.transition(inv_id, (RECOVERY_REQUIRED,), NOT_LAUNCHED, ended_at=now(),
+                            env=env,
                             detail={"owner_quote": quote, "source": "chat",
                                     "evidence_at_reconcile": ev,
                                     "approval": "stays consumed"}):
