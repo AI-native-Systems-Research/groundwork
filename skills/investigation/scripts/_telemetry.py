@@ -35,11 +35,16 @@ def sha256_file(path: Path) -> str:
 
 
 def _finite(values: list) -> list[float]:
+    """Finite float values only: non-numeric and non-finite (NaN/Inf) samples
+    are dropped. Ints beyond float range raise OverflowError from float(v)
+    (json.loads parses a >308-digit JSON number back as a Python int), so they
+    are dropped here too — the same fail-closed outcome as the string form,
+    which converts to inf and fails the isfinite check."""
     out = []
     for _ts, v in values:
         try:
             x = float(v)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
         if math.isfinite(x):
             out.append(x)

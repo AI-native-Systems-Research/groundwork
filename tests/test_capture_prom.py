@@ -40,6 +40,8 @@ def fixture_for(promql: str) -> tuple[int, bytes]:
         return 200, (FIX / "query_range-empty.json").read_bytes()
     if "syntax_error" in promql:
         return 400, (FIX / "query_range-error.json").read_bytes()
+    if "huge_int" in promql:
+        return 200, (FIX / "query_range-huge_int.json").read_bytes()
     if "huge_ts" in promql:
         return 200, (FIX / "query_range-huge_ts.json").read_bytes()
     return 200, (FIX / "query_range-vllm_running.json").read_bytes()
@@ -267,6 +269,79 @@ class TestCaptureUrl(Base):
         self.assertTrue(capture_prom.is_loopback("localhost"))
         self.assertTrue(capture_prom.is_loopback("127.1.2.3"))
         self.assertFalse(capture_prom.is_loopback("10.0.0.5"))
+
+
+class TestHugeIntSamples(Base):
+    """Sample values beyond float range must be dropped, not fatal.
+
+    json.loads parses an over-float-range JSON number (a >308-digit bare
+    decimal) back as a Python int, and float(int) raises OverflowError —
+    so a Prometheus response carrying such a sample reaches _finite
+    (summary.json, every query) and otel_lines (metrics.jsonl) as an int.
+    Before the OverflowError guards those two loops crashed the whole
+    capture with a raw traceback. The string form ("1e400") never raised:
+    float(str) gives inf, which the isfinite check already filtered — the
+    int form must get the same fail-closed treatment (supervisor 78eaf7fe)."""
+
+    def test_finite_and_otel_lines_tolerate_huge_ints(self):
+        big = 10 ** 400
+        # Reachability pin: the JSON round-trip delivers a Python int.
+        self.assertIsInstance(json.loads(json.dumps({"v": big}))["v"], int)
+        # _finite drops the huge-int sample and keeps its finite siblings;
+        # the string form ("1e400" -> inf) was already dropped at main.
+        self.assertEqual(_telemetry._finite([(1.0, big), (2.0, 5), (3.0, "1e400"),
+                                             (4.0, 6)]),
+                         [5.0, 6.0])
+        self.assertEqual(_telemetry._finite([(1.0, -big)]), [])
+        self.assertEqual(_telemetry._finite([(1.0, str(big))]), [])   # str -> inf
+        # summarize_query_range (the summary.json path) does not raise either.
+        summ = _telemetry.summarize_query_range(
+            {"data": {"result": [{"metric": {"pod": "p"}, "values": [[1, big], [2, 5]]}]}})
+        self.assertEqual(summ["overall"], {"mean": 5.0, "p50": 5.0, "max": 5.0,
+                                           "min": 5.0, "n_points": 1, "n_series": 1})
+        # otel_lines (the metrics.jsonl path) skips the huge-int point.
+        doc = {"data": {"result": [{"metric": {"pod": "p"},
+                                    "values": [[1762336800, big], [1762336830, 5]]}]}}
+        lines = list(capture_prom.otel_lines("c1", "q", "promql", doc))
+        self.assertEqual(len(lines), 1)
+        pts = json.loads(lines[0])["resourceMetrics"][0]["scopeMetrics"][0][
+            "metrics"][0]["gauge"]["dataPoints"]
+        self.assertEqual(pts, [{"timeUnixNano": "1762336830000000000", "asDouble": 5.0}])
+        # The huge value never lands in the OTel output.
+        self.assertNotIn(str(big), lines[0])
+        # Finite values are untouched by the guards (main-parity spot check).
+        raw = json.loads((FIX / "query_range-vllm_running.json").read_text())
+        self.assertEqual(len(list(capture_prom.otel_lines("c1", "running", "q", raw))), 2)
+
+    def test_capture_with_huge_int_samples_succeeds(self):
+        # End-to-end: the fake server answers one query with the huge-int
+        # fixture. Before the fix this died mid-write with a raw
+        # OverflowError traceback (after prom/ was created), leaving a
+        # half-written capture; it must instead record the capture with the
+        # unrepresentable samples dropped.
+        q = self.tmp / "q.yaml"
+        q.write_text("huge: sum by (pod) (vllm:huge_int_metric)\n")
+        with FakeProm() as p:
+            r = self.run_cli("--url", p.url, "--queries", str(q))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = self.cap_dir()
+        # The raw response is kept byte-for-byte, huge int included.
+        self.assertEqual((d / "prom/huge.json").read_bytes(),
+                         (FIX / "query_range-huge_int.json").read_bytes())
+        # summary.json: series 0 keeps its 2 finite samples, series 1 keeps 1.
+        s = json.loads((d / "summary.json").read_text())["queries"]["huge"]
+        self.assertEqual(s["overall"]["n_points"], 3)
+        self.assertEqual(s["overall"]["n_series"], 2)
+        self.assertEqual(s["series"][0]["n_points"], 2)   # 10**400 dropped
+        self.assertEqual(s["series"][1]["n_points"], 1)   # "1e400" dropped (was safe)
+        self.assertNotIn(str(10 ** 400), (d / "summary.json").read_text())
+        # metrics.jsonl: one line per series, huge-int point absent.
+        lines = (d / "metrics.jsonl").read_text().splitlines()
+        self.assertEqual(len(lines), 2)
+        npts = [len(json.loads(l)["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]
+                 ["gauge"]["dataPoints"]) for l in lines]
+        self.assertEqual(npts, [2, 1])
+        self.assertNotIn(str(10 ** 400), (d / "metrics.jsonl").read_text())
 
 
 class TestStep(Base):

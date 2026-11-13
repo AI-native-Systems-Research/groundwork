@@ -396,7 +396,7 @@ def otel_lines(capture_id: str, name: str, promql: str, doc: dict):
         for ts, v in s.get("values") or []:
             try:
                 x = float(v)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
             if not math.isfinite(x):       # JSON has no NaN; the raw file keeps it
                 continue
