@@ -37,6 +37,8 @@ def fixture_for(promql: str) -> tuple[int, bytes]:
         return 200, (FIX / "query_range-empty.json").read_bytes()
     if "syntax_error" in promql:
         return 400, (FIX / "query_range-error.json").read_bytes()
+    if "huge_ts" in promql:
+        return 200, (FIX / "query_range-huge_ts.json").read_bytes()
     return 200, (FIX / "query_range-vllm_running.json").read_bytes()
 
 
@@ -400,6 +402,100 @@ class TestRepoConfig(Base):
         self.assertGreater(len(d), 20)
         self.assertEqual(capture_prom.check_query_map(d, "starter"), {k: v.strip() for k, v in d.items()})
         self.assertNotIn("by (decision)", " ".join(d.values()))
+
+
+class TestBadTimestamps(Base):
+    """Sample timestamps that cannot become timeUnixNano must be dropped, not fatal.
+
+    otel_lines converts each sample's ts with int(round(float(ts) * 1000)) —
+    outside any guard until this fix. Every form below raised and killed the
+    whole capture mid-write (after prom/ was created): a huge-int ts
+    (json.loads parses a >308-digit bare decimal back as a Python int, and
+    float(int) raises OverflowError), an over-range string ts ("1e999" ->
+    float gives inf -> int(round(inf)) raises OverflowError — the case the
+    value guard does not cover, since float() itself succeeds), and a NaN
+    string ts (int(round(nan)) raises ValueError). A finite ts whose *1000
+    multiply overflows (1e306) is the fourth form. summary.json is immune:
+    _telemetry._finite never looks at ts. The value slot's drop-not-crash
+    treatment (PR #39 for values; 6f72438 / PR #37 for the same class in
+    other scripts) is extended to the ts slot (supervisor b1b122f5)."""
+
+    def test_otel_lines_skips_bad_ts_and_keeps_finite_siblings(self):
+        big = 10 ** 400
+        # Reachability pins: the JSON round-trip delivers the int form, and
+        # json.loads parses a bare over-range number as a float inf.
+        self.assertIsInstance(json.loads(json.dumps({"ts": big}))["ts"], int)
+        self.assertEqual(json.loads("[1e999]")[0], float("inf"))
+        for bad_ts in (big, "1e999", "nan", None, "junk", 1e306, float("inf")):
+            doc = {"data": {"result": [{"metric": {"pod": "p"},
+                                        "values": [[bad_ts, 1.0], [1762336830, 5.0]]}]}}
+            lines = list(capture_prom.otel_lines("c1", "q", "promql", doc))
+            self.assertEqual(len(lines), 1, bad_ts)
+            pts = json.loads(lines[0])["resourceMetrics"][0]["scopeMetrics"][0][
+                "metrics"][0]["gauge"]["dataPoints"]
+            self.assertEqual(pts, [{"timeUnixNano": "1762336830000000000",
+                                    "asDouble": 5.0}], bad_ts)
+        # The line is still emitted for a series whose every ts is bad.
+        doc = {"data": {"result": [{"metric": {"pod": "p"},
+                                    "values": [[big, 1.0]]}]}}
+        lines = list(capture_prom.otel_lines("c1", "q", "promql", doc))
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(json.loads(lines[0])["resourceMetrics"][0]["scopeMetrics"][0]
+                         ["metrics"][0]["gauge"]["dataPoints"], [])
+        # Normal timestamps are untouched (main-parity spot check, incl. the
+        # string form and a float ts with a fractional second).
+        raw = json.loads((FIX / "query_range-vllm_running.json").read_text())
+        self.assertEqual(len(list(capture_prom.otel_lines("c1", "running", "q", raw))), 2)
+        doc = {"data": {"result": [{"metric": {"pod": "p"},
+                                    "values": [["1762336830", 1.0], [1762336830.5, 2.0]]}]}}
+        pts = json.loads(list(capture_prom.otel_lines("c1", "q", "p", doc))[0])
+        self.assertEqual(pts["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]
+                         ["gauge"]["dataPoints"],
+                         [{"timeUnixNano": "1762336830000000000", "asDouble": 1.0},
+                          {"timeUnixNano": "1762336830500000000", "asDouble": 2.0}])
+
+    def test_capture_with_bad_ts_succeeds(self):
+        # End-to-end: the fake server answers one query with the bad-ts
+        # fixture (huge int, over-range string, NaN string — one series each,
+        # finite siblings kept). Before the fix this died mid-write with a raw
+        # OverflowError traceback (after prom/ was created), leaving a
+        # half-written capture; it must instead record the capture with the
+        # unrepresentable points dropped and their values still in summary.
+        q = self.tmp / "q.yaml"
+        q.write_text("huge: sum by (pod) (vllm:huge_ts_metric)\n")
+        with FakeProm() as p:
+            r = self.run_cli("--url", p.url, "--queries", str(q))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = self.cap_dir()
+        # The raw response is kept byte-for-byte, bad timestamps included.
+        self.assertEqual((d / "prom/huge.json").read_bytes(),
+                         (FIX / "query_range-huge_ts.json").read_bytes())
+        # summary.json is ts-blind: every value is counted (3 + 2 + 2 points).
+        s = json.loads((d / "summary.json").read_text())["queries"]["huge"]
+        self.assertEqual(s["overall"]["n_points"], 7)
+        self.assertEqual(s["overall"]["n_series"], 3)
+        self.assertEqual([x["n_points"] for x in s["series"]], [3, 2, 2])
+        # metrics.jsonl: one line per series, the three bad-ts points absent,
+        # the seven finite points present with correct nanosecond slots.
+        lines = (d / "metrics.jsonl").read_text().splitlines()
+        self.assertEqual(len(lines), 3)
+        by_pod = {}
+        for l in lines:
+            rec = json.loads(l)
+            attrs = {a["key"]: a["value"]["stringValue"]
+                     for a in rec["resourceMetrics"][0]["resource"]["attributes"]}
+            by_pod[attrs["pod"]] = rec["resourceMetrics"][0]["scopeMetrics"][0][
+                "metrics"][0]["gauge"]["dataPoints"]
+        self.assertEqual(by_pod["vllm-decode-0"],
+                         [{"timeUnixNano": "1762336830000000000", "asDouble": 8.0},
+                          {"timeUnixNano": "1762336860000000000", "asDouble": 9.0}])
+        self.assertEqual(by_pod["vllm-decode-1"],
+                         [{"timeUnixNano": "1762336830000000000", "asDouble": 6.0}])
+        self.assertEqual(by_pod["vllm-decode-2"],
+                         [{"timeUnixNano": "1762336830000000000", "asDouble": 4.0}])
+        # The unrepresentable timestamps never land in the OTel output.
+        self.assertNotIn(str(10 ** 400), (d / "metrics.jsonl").read_text())
+        self.assertNotIn("1e999", (d / "metrics.jsonl").read_text())
 
 
 STUB_SERVER = textwrap.dedent('''\

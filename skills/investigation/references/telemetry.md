@@ -160,7 +160,10 @@ object holding a single `resourceMetrics` record:
   quantiles), so there is no counter or histogram to reconstruct.
 - `timeUnixNano` is a decimal string, following OTLP/JSON's int64 rule, rounded
   to the millisecond. `asDouble` is the sample value. NaN and Inf samples are
-  skipped, because JSON can't carry them. The raw `prom/` file still has them.
+  skipped, because JSON can't carry them, and so are samples whose *timestamp*
+  can't be converted to nanoseconds at all (an int beyond float range, an
+  over-range or NaN timestamp, or one whose millisecond multiply overflows) —
+  the point has no representable slot. The raw `prom/` file still has them.
 - An empty query writes no lines.
 
 ### Size guard

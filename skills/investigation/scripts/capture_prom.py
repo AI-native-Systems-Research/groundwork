@@ -365,7 +365,15 @@ def _attr(k: str, v: str) -> dict:
 
 
 def otel_lines(capture_id: str, name: str, promql: str, doc: dict):
-    """One OTLP-JSON MetricsData line per series: {"resourceMetrics": [one record]}."""
+    """One OTLP-JSON MetricsData line per series: {"resourceMetrics": [one record]}.
+
+    A sample whose timestamp cannot be converted to nanoseconds is skipped,
+    like one whose value is not a finite float: OTLP can carry neither. ts
+    hazards: an int beyond float range (json.loads parses a >308-digit JSON
+    number back as a Python int), a float() of over-range/NaN text, and a
+    finite float whose *1000 (ms) multiply overflows — all three raise at the
+    bare conversion instead of degrading. The raw prom/ file keeps every
+    sample either way."""
     for s in (doc.get("data") or {}).get("result") or []:
         labels = dict(s.get("metric") or {})
         attrs = [_attr(k, labels[k]) for k in sorted(labels)]
@@ -379,8 +387,16 @@ def otel_lines(capture_id: str, name: str, promql: str, doc: dict):
                 continue
             if not math.isfinite(x):       # JSON has no NaN; the raw file keeps it
                 continue
-            points.append({"timeUnixNano": str(int(round(float(ts) * 1000)) * 1_000_000),
-                           "asDouble": x})
+            try:
+                # The ts slot has the same hazards as the value slot: an int
+                # beyond float range, a float() of over-range/NaN text, or a
+                # finite float whose *1000 (ms) multiply overflows. OTLP's
+                # int64 timeUnixNano can carry none of them, so the sample is
+                # skipped and kept only in the raw prom/ file.
+                t_ns = str(int(round(float(ts) * 1000)) * 1_000_000)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            points.append({"timeUnixNano": t_ns, "asDouble": x})
         rm = {"resource": {"attributes": attrs},
               "scopeMetrics": [{
                   "scope": {"name": "investigation.capture_prom",
