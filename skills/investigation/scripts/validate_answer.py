@@ -82,10 +82,16 @@ def numeric_forms(v) -> list[str]:
     for integral values, trimmed ("4100") — so a float claim matches an int
     printed in the text and vice versa. A form qualifies only when
     float(form) == value; rounded spellings ("0.3" for 0.347) are never
-    emitted, so they can never false-positive."""
+    emitted, so they can never false-positive. Ints beyond float range
+    (json.loads parses a >308-digit decimal back as int, and float(v)
+    raises OverflowError on them) keep exactly their decimal spelling —
+    the only one the text could carry."""
     if not is_number(v):
         return []
-    f = float(v)
+    try:
+        f = float(v)
+    except OverflowError:            # e.g. 10**400 parsed from JSON
+        return [str(v)]
     s = repr(f)
     forms = [str(v) if isinstance(v, int) else s]
     trimmed = s.rstrip("0").rstrip(".")  # 4100.0 -> "4100" ("." guards the int part)
@@ -101,12 +107,19 @@ def numeric_forms(v) -> list[str]:
 def scalar_matches(scalar, value) -> bool:
     """Does one JSON scalar satisfy the iron rule for `value`? Strings match
     exactly; numbers compare with the Nous v2 tolerances. Bools are not
-    numbers, so JSON true never satisfies a claim of 1."""
+    numbers, so JSON true never satisfies a claim of 1. A comparison
+    involving an int beyond float range (which OverflowErrors inside
+    math.isclose) falls back to exact equality — no huge int can be within
+    rel_tol of a finite value, so the tolerance is moot there."""
     if isinstance(value, str):
         return isinstance(scalar, str) and scalar == value
-    return (is_number(value) and isinstance(scalar, (int, float))
-            and not isinstance(scalar, bool)
-            and math.isclose(value, scalar, rel_tol=REL_TOL, abs_tol=ABS_TOL))
+    if not (is_number(value) and isinstance(scalar, (int, float))
+            and not isinstance(scalar, bool)):
+        return False
+    try:
+        return math.isclose(value, scalar, rel_tol=REL_TOL, abs_tol=ABS_TOL)
+    except OverflowError:            # huge int beyond float range (10**400)
+        return value == scalar
 
 
 def standalone_number_in(text: str, forms) -> bool:
