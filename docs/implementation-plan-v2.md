@@ -13,7 +13,7 @@ during implementation.
 |---|---|---|---|
 | F1 | **signal-pipeline can't read a metrics-only directory.** Stage 01 (`spotlights/src/spotlights_engine/signal_pipeline/stages/s01_signal_extraction.py:50`) only takes the raw-OTel route when `traces.jsonl` exists. Otherwise it needs a pre-cooked `01_signals.json` / `signals.json`. The design says `metrics.jsonl` "reads with no adapter", and that's false. | Phase 2, 3, 4 | **Decided (owner):** spotlights owns anomaly detection, not this skill. The skill doesn't write `01_signals.json` and doesn't fake a `traces.jsonl`. `capture_prom.py` still writes `metrics.jsonl` in OTel `resourceMetrics` form, so it's ready when spotlights supports it. Until spotlights accepts a metrics-only directory, `doctor.py` reports `spotlights-telemetry` as unavailable for metrics-only captures and gives this reason. Owner action: raise the gap with spotlights (metrics-only `--telemetry-from`). |
 | F2 | **"Stdlib-only" isn't true today.** `collect.py` imports PyYAML, and every config file (`config.yaml`, `promql/starter.yaml`, `campaign.yaml`) is YAML. | Phase 2–4, frontmatter | **Decided (owner): yes.** Allow exactly one dependency, PyYAML. `doctor.py` and `validate_answer.py` stay stdlib-only, so preflight can report a missing PyYAML instead of crashing on it. Change the `compatibility` line to "Python 3.10+ and PyYAML". |
-| F3 | **No git remote is configured.** `npx skills add AI-native-Systems-Research/groundwork` and CI both need the GitHub repo. | Phase 7 | **Decided (owner): publish later.** Until then, use local-path installs (`npx skills add ./`) and run the CI checks locally. |
+| F3 | **No git remote is configured.** `npx skills add AI-native-Systems-Research/groundwork` and CI both need the GitHub repo. | Phase 7 | **Resolved 2026-11-10:** the repo is published (github.com/AI-native-Systems-Research/groundwork), so remote installs and CI both work; the earlier "publish later" decision was overtaken. |
 | F4 | **`--check-citations` header names a repo, but the validator needs a path.** `repo@sha:path:Lstart-Lend` only gives a repo *name*. | Phase 5 | Resolve a name in this order: (1) `--repo NAME=PATH` flags; (2) the git toplevel that contains the answer file, if its remote basename matches; (3) a `repos:` map in `~/.config/investigation/config.yaml`. If none match, it's an error under `--check-citations`. It's never a silent pass. |
 | F5 | **The current global install is a copy.** `skill/build.sh` copies the skill into `~/.claude/skills/investigation/`. Once build.sh is deleted, that copy goes stale with nothing to update it. | Phase 1 | In the same PR: `rm -rf ~/.claude/skills/investigation` and reinstall with `npx skills add ./ --skill investigation -g` (owner-run, touches $HOME). |
 | F6 | **The step count is inconsistent.** The design says "SKILL.md keeps the 9 steps" but the flow has steps 0–9 (ten). | Phase 2 | Use 0–9 throughout. |
@@ -128,9 +128,9 @@ Tests:
 
 ### P7 — CI (GitHub Actions; needs F3)
 
-The repo is published later (F3). So write the workflow file now, run each job's
-commands locally through a `scripts/ci-local.sh` wrapper (not installed with the
-skill), and turn the workflow on once the repo is on GitHub.
+The repo is published (F3, resolved 2026-11-10), and the workflow runs on
+GitHub. The jobs also run locally through a `scripts/ci-local.sh` wrapper (not
+installed with the skill), which stays the fast path while iterating.
 
 - `unit`: Python 3.10 and 3.12, `pip install pyyaml`, `python -m unittest discover tests`.
 - `spec`: `skills-ref validate skills/investigation`. Check the actual package name and install method first; if no CLI is published, add a small frontmatter and line-count check script.
@@ -158,7 +158,7 @@ and its logic is unchanged apart from paths.
 | P4 | M | collection.json namespacing is the only behavior change to existing code |
 | P5 | S | |
 | P6 | S | |
-| P7 | S | blocked on publishing the repo |
+| P7 | S | done: repo published 2026-11-10, CI runs on GitHub |
 | P8 | M | owner time + one real cluster capture |
 
 ## Owner decisions (2026-11-05)
@@ -167,6 +167,6 @@ and its logic is unchanged apart from paths.
 2. PyYAML as the single dependency: **yes** (F2).
 3. Namespaced `collection.json`: **yes** (P4).
 4. License: **Apache-2.0** (P6).
-5. Publishing to GitHub: **later**; local installs and local CI until then (F3, P7).
+5. Publishing to GitHub: **later**; local installs and local CI until then (F3, P7). *(Overtaken: the repo was published 2026-11-10.)*
 
 Still open: raising the metrics-only `--telemetry-from` gap with spotlights (owner).
