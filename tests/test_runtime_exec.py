@@ -21,6 +21,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _runtime_fake_adapter as fake  # noqa: E402
 from _runtime_util import kill_matching, request, wait_for  # noqa: E402
+from ains_runtime import adapters as A  # noqa: E402
 from ains_runtime import approval as AP  # noqa: E402
 from ains_runtime import limits as L  # noqa: E402
 from ains_runtime import preparation as P  # noqa: E402
@@ -642,6 +643,126 @@ class EngineEnv(unittest.TestCase):
         out = SV.engine_env({"env_pass": SV.env_pass_names({}, env)}, env)
         self.assertEqual(out, {"NODE_EXTRA_CA_CERTS": "/ca.pem", "SSL_CERT_FILE": "/ca.pem",
                                "HTTPS_PROXY": "http://proxy"})
+
+
+# --- reserve()/spawn_supervisor() launch-side guards ------------------------------
+# In-process, like the Supervise class: these guards cannot fire in a normal
+# launch (the contract validators reject bad request limits at submit and the
+# shipped adapters always return well-formed specs), so each one is driven by
+# a FakeAdapter subclass or a patched helper that manufactures the defect the
+# guard exists for. Every refusal must be a LaunchError naming the reason,
+# never a traceback; the spawn failure must leave a reconcilable invocation.
+
+class LaunchGuards(Base):
+    """reserve()'s validation of what the adapter returned, and the launch
+    problems the stored preparation's own labels can still carry."""
+
+    def reserved(self, spec, *, label="x"):
+        """One approved preparation whose adapter returns `spec` from
+        execute(); returns whatever reserve() does with it."""
+        adapter = fake.FakeAdapter()
+
+        def execute(record, ctx):
+            if isinstance(spec, Exception):
+                raise spec
+            return spec
+        adapter.execute = execute
+        prev = A.register(adapter, replace=True)
+        self.addCleanup(A.unregister, adapter.capability, prev)
+        prep = self.approved("succeed")
+        return SV.reserve(self.store, prep, env=self.env)
+
+    def test_well_formed_spec_reserves(self):
+        # Control: the same subclass machinery with a good spec reserves
+        # cleanly, so the refusals below are the guards, not the harness.
+        inv_id, spec, _ = self.reserved(
+            A.LaunchSpec(argv=["/bin/true", "run"], cwd="/tmp", env_set={}))
+        self.assertEqual(self.store.get_invocation(inv_id)["state"], SV.RESERVED)
+
+    def test_execute_returning_a_non_launchspec_is_refused(self):
+        with self.assertRaisesRegex(SV.LaunchError,
+                                    "adapter.execute did not return a LaunchSpec"):
+            self.reserved("not-a-launchspec")
+
+    def test_execute_returning_an_empty_argv_is_refused(self):
+        with self.assertRaisesRegex(SV.LaunchError,
+                                    "argv must be a non-empty list of strings"):
+            self.reserved(A.LaunchSpec(argv=[], cwd="/tmp", env_set={}))
+
+    def test_execute_returning_a_non_string_argv_element_is_refused(self):
+        with self.assertRaisesRegex(SV.LaunchError,
+                                    "argv must be a non-empty list of strings"):
+            self.reserved(A.LaunchSpec(argv=["/bin/true", 42], cwd="/tmp", env_set={}))
+
+    def test_execute_returning_a_relative_cwd_is_refused(self):
+        with self.assertRaisesRegex(SV.LaunchError,
+                                    "launch cwd must be an absolute path"):
+            self.reserved(A.LaunchSpec(argv=["/bin/true"], cwd="rel", env_set={}))
+
+    def test_execute_returning_a_non_string_env_value_is_refused(self):
+        with self.assertRaisesRegex(SV.LaunchError,
+                                    "launch env_set must map strings to strings"):
+            self.reserved(A.LaunchSpec(argv=["/bin/true"], cwd="/tmp",
+                                       env_set={"A": 1}))
+
+    def test_execute_raising_is_wrapped_in_a_launch_error(self):
+        with self.assertRaisesRegex(SV.LaunchError,
+                                    r"adapter\.execute failed: engine exploded"):
+            self.reserved(RuntimeError("engine exploded"))
+
+    def test_a_badly_labelled_limit_refuses_the_launch(self):
+        # contracts reject a bad max_iterations at submit, so the reachable
+        # defect is a preparation whose own labels are invalid: a monetary
+        # limit labelled engine-enforced is advisory-only by policy.
+        adapter = fake.FakeAdapter()
+        real_prepare = adapter.prepare
+
+        def prepare(request, ctx):
+            p = real_prepare(request, ctx)
+            p.limits = [{"name": "max_cost_usd", "value": 5, "enforced_by": "engine"}]
+            return p
+        adapter.prepare = prepare
+        prev = A.register(adapter, replace=True)
+        self.addCleanup(A.unregister, adapter.capability, prev)
+        prep = self.approved("succeed")
+        with self.assertRaisesRegex(SV.LaunchError,
+                                    "monetary limits are advisory only"):
+            SV.reserve(self.store, prep, env=self.env)
+        # Nothing was reserved: the refusal consumed no approval.
+        self.assertIsNone(self.store.get_invocation_for_prep(prep))
+
+    def test_spawn_failure_marks_the_invocation_recovery_required(self):
+        prep = self.approved("succeed")
+        inv_id, _, _ = SV.reserve(self.store, prep, env=self.env, inv_id="inv-spawnfail")
+        # An unspawnable supervisor binary: Popen raises OSError, and the
+        # invocation must become recovery_required for `reconcile
+        # --mark-not-launched`, not a traceback.
+        with mock.patch.object(SV, "supervisor_argv",
+                               return_value=["/nonexistent/supervisor-bin",
+                                             "--db", str(self.db),
+                                             "_supervise", inv_id]):
+            with self.assertRaisesRegex(SV.LaunchError,
+                                        "could not start the supervisor"):
+                SV.spawn_supervisor(self.store, inv_id, env=self.env)
+        inv = self.store.get_invocation(inv_id)
+        self.assertEqual(inv["state"], SV.RECOVERY_REQUIRED)
+        events = [e for e in self.store.list_events(entity_id=inv_id)
+                  if e["event"] == f"state:{SV.RECOVERY_REQUIRED}"]
+        self.assertIn("supervisor spawn failed", events[-1]["detail"]["reason"])
+        self.assertEqual(self.starts(), [])
+
+    def test_reap_skips_a_live_supervisor_and_reaps_it_once_exited(self):
+        # A supervisor still running at reap time is skipped (TimeoutExpired
+        # must not crash the reaper); a finished one is dropped from _SPAWNED.
+        p = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(self.stop, p)
+        SV._SPAWNED.append(p)
+        SV.reap(timeout=0.2)   # live: skipped, kept for a later reap
+        self.assertIn(p, SV._SPAWNED)
+        p.kill()
+        p.wait(timeout=10)
+        SV.reap(timeout=1.0)
+        self.assertNotIn(p, SV._SPAWNED)
 
 
 if __name__ == "__main__":
