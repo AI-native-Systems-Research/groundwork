@@ -1,0 +1,35 @@
+{
+  "_doc": "Facts about sim2real at the locked commit. Sources are paths in the sim2real repo at that commit; 'source' cites where the fact was checked. Re-verify every entry when the lock changes. sim2real is checkout-only: pyproject.toml is declaration-only, nothing is installed, and the skill only prepares input and prints commands (references/sim2real.md).",
+  "verified_against": "sim2real@ad4d12928e82",
+  "verified_on": "2026-11-13",
+  "facts": {
+    "min_python": {
+      "value": [3, 12],
+      "source": "pipeline/__init__.py MIN_PYTHON, and pyproject.toml requires-python; the floor is dependency-driven (numpy's Requires-Python), the code itself carries no 3.12-only syntax"
+    },
+    "pyproject_declaration_only": {
+      "value": true,
+      "source": "pyproject.toml header comment: 'Declaration only — not built or installed as a package'; the install path is pip install -r requirements.txt"
+    },
+    "no_sim2real_executable": {
+      "value": true,
+      "source": "follows from pyproject_declaration_only: the bare `sim2real translation register` in byo.py's output is shorthand; the real command is `python pipeline/sim2real.py --experiment-root <abs> translation register ...` from the checkout"
+    },
+    "register_spec_form": {
+      "value": "--algorithm NAME=IMAGE@CONFIG (repeatable)",
+      "source": "pipeline/README.md 'Register a translation'; the separate --algorithm/--image/--config form still parses but is deprecated (N=1, warns)"
+    },
+    "pipeline_subcommands": {
+      "value": ["sim2real.py", "cluster.py", "deploy.py", "setup.py"],
+      "source": "pipeline/README.md section headers; sim2real.py's `use` and `list runs` manage runs independently of the main flow"
+    },
+    "experiment_root_is_top_level_flag": {
+      "value": true,
+      "source": "references/sim2real.md 'The register command': --experiment-root must precede `translation` and argparse rejects it after `register`; without it sim2real uses the cwd"
+    },
+    "bootstrap_skill": {
+      "value": ".claude/skills/sim2real-bootstrap/SKILL.md",
+      "source": "the bootstrap skill the owner runs from the sim2real checkout; BLIS mode (default) and --byo mode are both documented there"
+    }
+  }
+}

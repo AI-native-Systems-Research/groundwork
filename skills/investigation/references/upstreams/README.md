@@ -5,10 +5,26 @@ doesn't restate any of it, and `tests/test_upstreams.py` enforces that.
 
 | File | Holds |
 |---|---|
-| `lock.json` | The exact versions used: the Nous and Spotlights commits; the BLIS catalog commit; every BLIS binary by sha256, with its source commit, embedded router and patches |
+| `lock.json` | The exact versions used: the Nous, Spotlights, sim2real, vLLM and llm-d-router commits; the BLIS catalog commit; every BLIS binary by sha256, with its source commit, embedded router and patches |
 | `nous.json` | Nous facts: campaign keys, effort levels, stop reasons, native files, exit code, env var, worktree dir |
 | `spotlights.json` | Spotlights facts: file env vars, model id patterns, module-name rules, dry-run fields, exit codes |
 | `blis.json` | BLIS facts: which knobs are representable and which aren't (`method-plan.md`'s table is generated from this) |
+| `sim2real.json` | sim2real facts: the Python floor, declaration-only packaging, register spec form, subcommands |
+| `vllm.json` | vLLM facts (metric-name source only): counter/histogram classes, which counters are scraped with `_total`, the `pod` label caveat |
+| `llm-d-router.json` | llm-d-router facts (metric-name source only): which counters declare `_total` themselves, the `decision_type` label and its values |
+
+vLLM and llm-d-router are locked as **metric-name sources only**: nothing of
+either is installed or launched, and their lock entries exist so the
+Prometheus names in `assets/promql/starter.yaml` and `references/telemetry.md`
+can't drift from versions nobody re-checked. sim2real is **checkout-only**:
+its `pyproject.toml` is declaration-only, so the pin names the commit a
+configured checkout (doctor's `engines.sim2real`) is compared against, not an
+installable version. The version banners in `references/*.md` and
+`assets/promql/starter.yaml` must cite commits this folder holds —
+`tests/test_upstreams.py` `test_banner_shas_are_locked` enforces it — with one
+documented exception: an unpushed engine branch (see docs/design-v2.md's pin
+policy) is never pinned, and its banner must say so inline, the way
+`spotlights.md`'s `e7aff25` does.
 
 Each fact is `{"value": ..., "source": "<path:line at the locked version>"}`.
 Each facts file has `verified_against: <name>@<12 hex>`, a digest of its

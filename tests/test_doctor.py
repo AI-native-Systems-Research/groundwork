@@ -403,6 +403,7 @@ class TestHelpers(unittest.TestCase):
         pins = doctor.read_pins()
         self.assertEqual(pins["nous-pin"], "nous-v2-fixes@e224cc1")
         self.assertEqual(pins["spotlights-pin"], "v0.1.1@cccc290")
+        self.assertEqual(pins["sim2real-pin"], "main@28a8e98")
         self.assertEqual(pins["version"], "2.0.0")
 
     def test_same_sha(self):
