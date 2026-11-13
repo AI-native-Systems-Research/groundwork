@@ -322,6 +322,7 @@ def _collect(store: Store, inv_id: str, env: dict, study) -> tuple[dict, Normali
     except Exception as e:      # collection failure: record it, change nothing else
         norm = Normalized("failed", f"collection failed: {type(e).__name__}: {e}",
                           explanation="collection failed; the native output is kept as is")
+        raw = None
     # Still checked after a collection failure: the failure reason embeds the
     # adapter's exception message, which may have echoed a secret value.
     if find_secret_values(norm.summary(), env):

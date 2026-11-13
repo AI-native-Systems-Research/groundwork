@@ -328,6 +328,27 @@ class NousResults(Mixin, NousBase):
         # nothing else).
         self.assertIn(secret, (wd / "answer.json").read_text())
 
+    def test_adapter_returning_a_non_dict_fails_the_collection_cleanly(self):
+        # A truthy non-dict from adapter.collect() raises TypeError inside
+        # the try, which the guard exists to turn into a failed collection.
+        # Before the fix `raw` kept the non-dict value through the except
+        # branch, so the failure path itself died with AttributeError at
+        # `raw.items()` instead of reporting the collection as failed.
+        inv, _ = self.run_fixture("workdir-max-iterations")
+        RS.collect(self.store, inv, env=self.env)  # classify: exited -> completed
+        with NoLaunch(self):
+            with mock.patch.object(self.adapter, "collect",
+                                   return_value=["not", "a", "dict"]):
+                out = RS.collect(self.store, inv, env=self.env, study=self.study)
+        self.assertEqual(out["collection"]["state"], "failed")
+        self.assertIn("adapter.collect returned no dict",
+                      out["collection"]["reason"])
+        self.assertIsNone(out["adapter_output"])
+        # The failed collection is recorded, and a retry (with the adapter
+        # behaving) still works: collection is read-only and repeatable.
+        b2, _ = self.build(inv)
+        self.assertEqual(b2["collection"]["state"], "collected")
+
 
 # --- Spotlights static --------------------------------------------------------------
 
