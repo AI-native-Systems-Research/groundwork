@@ -105,6 +105,7 @@ class NoRestatedUpstreamFacts(unittest.TestCase):
             "references/sim2real.md": ["28a8e98"],
             "references/telemetry.md": ["2f1cba799e", "618eb0a9"],
             "assets/promql/starter.yaml": ["2f1cba799e", "618eb0a9"],
+            "references/answer-contract.md": ["618eb0a9"],
         }
         for rel, shas in banners.items():
             text = (SKILL / rel).read_text()
