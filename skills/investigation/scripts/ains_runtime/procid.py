@@ -414,5 +414,11 @@ def find_by_argv(argv: Sequence[str] | None) -> list[int]:
     for line in (text or "").splitlines():
         t = line.split(None, 2)
         if len(t) == 3 and not t[1].startswith("Z") and argv_matches(t[2], argv):
-            found.append(int(t[0]))
+            # A process whose argv contains an embedded newline makes ps print
+            # a continuation line whose first token is not a pid: skip it,
+            # never crash (the same contract process_table()'s ps path keeps).
+            try:
+                found.append(int(t[0]))
+            except ValueError:
+                continue
     return sorted(p for p in found if p != os.getpid())
