@@ -516,9 +516,19 @@ class CardTruncation(Base):
                 return p
         return Big()
 
+    def setUp(self):
+        super().setUp()
+        # Registered AFTER Base.setUp's fake.use(), so _big_prev is Base's
+        # plain FakeAdapter; unregistered BEFORE Base.tearDown's _restore(),
+        # so the last restore wins and the shipped NousAdapter is what stays.
+        # addCleanup would invert this: unittest runs it after tearDown.
+        self._big_prev = A.register(self.big_adapter(), replace=True)
+
+    def tearDown(self):
+        A.unregister("nous", self._big_prev)
+        super().tearDown()
+
     def test_oversize_card_truncates_body_and_keeps_code_and_pointer(self):
-        prev = A.register(self.big_adapter(), replace=True)
-        self.addCleanup(A.unregister, "nous", prev)
         self.submit(self.req(question="Why " + "very " * 40 + "slow?",
                              locks={f"k{i}": "v" * 230 for i in range(12)}))
         res = self.prepare()
