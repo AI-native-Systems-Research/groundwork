@@ -307,13 +307,23 @@ def _collect(store: Store, inv_id: str, env: dict, study) -> tuple[dict, Normali
         if not isinstance(raw, dict):
             raise TypeError("adapter.collect returned no dict")
         norm = normalize(adapter, raw, rec)
-        if rec["capability"] == "nous" and norm.state == "collected":
+        # The secret guard runs BEFORE the merge and covers the FULL raw
+        # adapter output — the Nous bundle too, which never reaches
+        # norm.summary() but does reach <study>/collection.json — so a hit
+        # fails the collection with nothing merged and no output recorded.
+        if find_secret_values(raw, env) or find_secret_values(norm.summary(), env):
+            norm = Normalized("failed", "collection output contained a secret value; "
+                              "not recorded")
+            raw = None
+        elif rec["capability"] == "nous" and norm.state == "collected":
             path = _merge_nous_bundle(raw, ctx.study)
             if path:
                 norm.notes.append(f'merged the collect.py bundle into {path} under "nous"')
     except Exception as e:      # collection failure: record it, change nothing else
         norm = Normalized("failed", f"collection failed: {type(e).__name__}: {e}",
                           explanation="collection failed; the native output is kept as is")
+    # Still checked after a collection failure: the failure reason embeds the
+    # adapter's exception message, which may have echoed a secret value.
     if find_secret_values(norm.summary(), env):
         norm = Normalized("failed", "collection output contained a secret value; "
                           "not recorded")
