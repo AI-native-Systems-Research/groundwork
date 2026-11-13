@@ -74,9 +74,13 @@ class Base(unittest.TestCase):
                     "HOME": str(self.tmp), "INVESTIGATION_RUNS": str(self.runs),
                     "INVESTIGATION_CONFIG_HOME": str(self.tmp / "cfg"),
                     "CLAUDE_CODE_ENTRYPOINT": "cli", "FAKE_API_TOKEN": SECRET}
-        self._saved_env = {k: os.environ[k] for k in
-                           ("INVESTIGATION_RUNS", "INVESTIGATION_CONFIG_HOME")
-                           if k in os.environ}
+        # Snapshot EVERY key setUp overwrites, not just INVESTIGATION_*: the
+        # suite runs in one process, so a key left stomped leaks into every
+        # later module and its children. HOME is the expensive one — children
+        # resolve their user site-packages (and coverage's a1_coverage.pth)
+        # through it, so leaving it pointed at the deleted temp dir silently
+        # drops every later child's subprocess coverage data.
+        self._saved_env = {k: os.environ.get(k) for k in self.env}
         os.environ.update(self.env)
         self.db = self.runs / "demo-repo" / "s1" / ".runtime" / S.DB_NAME
         self.store = S.open_store(self.db)
@@ -87,9 +91,11 @@ class Base(unittest.TestCase):
         SV.reap(timeout=5)
         self.store.close()
         P.make_writable(P.prepared_root(self.store))
-        for k in ("INVESTIGATION_RUNS", "INVESTIGATION_CONFIG_HOME"):
-            os.environ.pop(k, None)
-        os.environ.update(self._saved_env)
+        for k, v in self._saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     # -- state builders (same route the subprocess tests use) ----------------
@@ -528,6 +534,82 @@ class SecretHygiene(Base):
             rc, out, err = self.cli(*args)
             outs.append(out + err)
         self.assertNotIn(SECRET, "".join(outs))
+
+
+class EnvironHygiene(unittest.TestCase):
+    """Base.setUp points the LIVE parent os.environ at its temp dir; the
+    suite runs in one process, so whatever it leaves behind leaks into every
+    later module. This pins the round trip: after a test finished, every key
+    setUp overwrote holds the value it had before setUp ran.
+
+    Regression: _cleanup used to restore only the INVESTIGATION_* keys, so
+    HOME stayed pointed at the (deleted) temp dir for the rest of the suite.
+    Children resolve their user site-packages — and coverage's
+    a1_coverage.pth — through HOME, so every module after this one lost its
+    subprocess coverage data on a user-site coverage install: the full
+    suite's validate_answer.py read 69% where the same tests in isolation
+    read 88% (and CI, whose coverage is in the system site, read 88%)."""
+
+    def _fresh_base(self):
+        """A Base case with setUp/_cleanup driven by hand: unittest only
+        runs the addCleanup queue (the fake adapter's restore) when a case
+        is run, so seed the queue the way TestCase.__init__ does; the
+        caller must run doCleanups() then _cleanup()."""
+        case = Base.__new__(Base)
+        case._cleanups = []          # what TestCase.__init__ would set up
+        case.setUp()
+        return case
+
+    def _done_base(self, case):
+        """Unregister the fake adapter and drop Base's environ changes.
+        Runs the addCleanup queue by hand (doCleanups needs the _outcome
+        machinery a run would provide) — later-first, exactly as unittest
+        does."""
+        while case._cleanups:
+            fn, args, kwargs = case._cleanups.pop()
+            fn(*args, **kwargs)
+        case._cleanup()              # restores os.environ, removes the tempdir
+
+    def test_base_round_trips_every_environ_key_it_overwrites(self):
+        # Pin a sentinel on each key so the test sees a real difference
+        # even where the ambient value already matches Base's own.
+        keys = ("HOME", "CLAUDE_CODE_ENTRYPOINT", "FAKE_API_TOKEN")
+        before = {k: os.environ.get(k) for k in keys}
+        sentinel = "pre-existing-value-not-the-tests-own"
+        for k in keys:
+            os.environ[k] = sentinel
+        try:
+            case = self._fresh_base()
+            try:
+                for k in keys:
+                    self.assertNotEqual(os.environ[k], sentinel, k)
+            finally:
+                self._done_base(case)
+            for k in keys:
+                self.assertEqual(os.environ.get(k), sentinel, k)
+        finally:
+            for k, v in before.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_base_restores_keys_it_created_and_did_not_own(self):
+        # A key setUp introduces that did not exist before must be gone
+        # afterwards (not left holding the temp-dir value).
+        missing = ("CLAUDE_CODE_ENTRYPOINT", "FAKE_API_TOKEN")
+        saved = {k: os.environ.pop(k) for k in missing if k in os.environ}
+        try:
+            case = self._fresh_base()
+            try:
+                for k in missing:
+                    self.assertIn(k, os.environ)
+            finally:
+                self._done_base(case)
+            for k in missing:
+                self.assertNotIn(k, os.environ, k)
+        finally:
+            os.environ.update(saved)
 
 
 if __name__ == "__main__":
