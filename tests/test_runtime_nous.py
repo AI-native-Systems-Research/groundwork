@@ -6,6 +6,7 @@ throwaway dir (a fake binary + a git catalog) in a temp dir.
 """
 import copy
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from _runtime_util import request  # noqa: E402
 from ains_runtime import adapters as A  # noqa: E402
 from ains_runtime import approval as AP  # noqa: E402
 from ains_runtime import preparation as P  # noqa: E402
+from ains_runtime import procid  # noqa: E402
 from ains_runtime import store as S  # noqa: E402
 from ains_runtime.adapters import nous as N  # noqa: E402
 from ains_runtime.adapters.base import AdapterContext  # noqa: E402
@@ -276,6 +278,84 @@ class Validate(Base):
         self.assertProblem(self.msg(semantics={"target_system": {
             "description": "d", "repo_path": "/elsewhere"}}), "not rendered")
 
+    def test_optional_semantics_type_and_value_problems(self):
+        """Every optional-semantics rejection message, one bad value each.
+
+        Each row names a branch semantics_problems() guards: the request is
+        refused with that exact reason, not with a generic one (and never
+        crashes on the wrong type)."""
+        knobs = {"knobs": ["--kv-cpu-blocks"]}
+        for over, text in (
+                ({"semantics": {"models": {"session": "model-x", "extra": 1}}},
+                 "semantics.models: only `session` is supported"),
+                ({"question": "   "}, "question: required"),
+                ({"objective": ""}, "objective: required"),
+                ({"semantics": {"experiment_commands": "x"}},
+                 "semantics.experiment_commands: non-empty list of regexes"),
+                ({"semantics": {"experiment_commands": []}},
+                 "semantics.experiment_commands: non-empty list of regexes"),
+                ({"semantics": {"task_limits": {"max_runs": True}}},
+                 "semantics.task_limits: only {max_runs: int}"),
+                ({"semantics": {"task_limits": {"max_runs": "3"}}},
+                 "semantics.task_limits: only {max_runs: int}"),
+                ({"semantics": {"task_limits": {"max_cost": 3}}},
+                 "semantics.task_limits: only {max_runs: int}"),
+                ({"semantics": {"locked_workload": ["x"]}},
+                 "semantics.locked_workload: must be a flat mapping"),
+                ({"semantics": {"min_improvement": "high"}},
+                 "semantics.min_improvement: must be a number"),
+                ({"semantics": {"min_improvement": True}},
+                 "semantics.min_improvement: must be a number"),
+                ({"semantics": {"stall_iterations": 0}},
+                 "semantics.stall_iterations: integer >= 1"),
+                ({"semantics": {"stall_iterations": "2"}},
+                 "semantics.stall_iterations: integer >= 1"),
+                ({"semantics": {"session_scope": "room"}},
+                 "semantics.session_scope: one of"),
+                ({"semantics": {"secrets": ["1bad"]}},
+                 "semantics.secrets: list of environment variable names"),
+                ({"semantics": {"secrets": "FAKE_TOKEN"}},
+                 "semantics.secrets: list of environment variable names"),
+                ({"semantics": {"blis": "x"}}, "semantics.blis: must be a mapping"),
+                ({"semantics": {"blis": {**knobs, "zzz": 1}}},
+                 "semantics.blis: unknown keys ['zzz']"),
+                ({"semantics": {"blis": {**knobs, "limitations": "x"}}},
+                 "semantics.blis.limitations: list of text"),
+                ({"semantics": {"blis": {**knobs, "limitations": [3]}}},
+                 "semantics.blis.limitations: list of text")):
+            with self.subTest(over=over):
+                self.assertProblem(self.msg(**over), text)
+
+    def test_locks_shape_problems(self):
+        """Malformed lock values are refused for their shape, before any
+        sha/commit comparison runs."""
+        locks = self.body()["locks"]
+        self.assertProblem(self.msg(locks={**locks, "blis_binary_sha256": "zz"}),
+                           "locks.blis_binary_sha256: must be 64 hex digits")
+        self.assertProblem(self.msg(locks={**locks, "catalog_commit": "zz"}),
+                           "locks.catalog_commit: must be a full 40-hex commit")
+        # A catalog dir that exists but is not a git checkout: the commit is
+        # lock-shaped, so the failure is reported against the catalog itself.
+        (self.app / "plain").mkdir()
+        self.assertProblem(self.msg(semantics={"blis": {"knobs": ["--kv-cpu-blocks"],
+                                                        "catalog": "plain"}}),
+                           "is not a git checkout")
+
+    def test_collision_flags_a_legacy_campaign_and_skips_own_pid(self):
+        rid = "nousfixture-run-0001"
+        legacy = self.repo / ".nous" / rid
+        legacy.mkdir(parents=True)
+        (legacy / "state.json").write_text("{}")
+        self.assertProblem(self.msg(), f"a Nous campaign already exists at {legacy}")
+        shutil.rmtree(self.repo / ".nous")
+        # The process scan skips this process's own pid: a Nous command line
+        # belonging to the caller is not a competing campaign.
+        self.hooks.processes = [(os.getpid(), "/x/bin/nous run c.yaml --run-id z")]
+        self.assertEqual(self.validate(self.msg()), [])
+        # ... while any other pid running nous run/resume still is one.
+        self.hooks.processes = [(999999, "/x/bin/nous run c.yaml --run-id z")]
+        self.assertProblem(self.msg(), "already running")
+
 
 # --- prepare / rendered YAML ------------------------------------------------
 
@@ -331,6 +411,49 @@ class Render(Base):
         by = {x["name"]: x["enforced_by"] for x in mat["limits"]}
         self.assertEqual(by["max_iterations"], "engine")
         self.assertIn("nous", res.card)
+
+    def test_prepare_reports_unknown_free_space(self):
+        """The disk-usage probe is advisory: an OSError must not fail the
+        preparation, and the card must say the space is unknown."""
+        m = self.submit(self.msg())
+        with mock.patch.object(N.shutil, "disk_usage", side_effect=OSError("no stat")):
+            res = self.prepare(m["work_id"])
+        self.assertIn("free space under the runs dir: unknown", res.card)
+        # Control: with the probe working the card reports a real figure.
+        res2 = self.prepare(self.submit(self.msg())["work_id"])
+        self.assertRegex(res2.card, r"GB free under the runs dir")
+        self.assertNotIn("unknown", [s for s in res2.card.splitlines()
+                                     if "free under the runs dir" in s][0])
+
+    def test_execute_builds_the_launch_spec_from_the_record(self):
+        """execute() re-reads exactly what prepare() reserved: the supervisor
+        spawns this spec for a real launch, with no adapter state in between."""
+        m = self.submit(self.msg())
+        rec = self.prepare(m["work_id"]).record
+        spec = self.adapter.execute(rec, self.ctx())
+        self.assertEqual(spec.argv, rec["argv"])
+        self.assertEqual(spec.cwd, rec["cwd"])
+        self.assertEqual(spec.env_set, rec["env_set"])
+        self.assertEqual(spec.native_run_id, rec["native_run_id"])
+
+    def test_evidence_survives_a_record_without_a_work_dir(self):
+        """evidence() reads env_set/native_run_id to find the work dir; a
+        record without them (or with a broken shape) still returns the base
+        expected-artifacts evidence instead of crashing."""
+        wd = self.runs / "nousfixture-run-0001"
+        wd.mkdir(parents=True)
+        (wd / "state.json").write_text("{}")
+        record = {"env_set": {"NOUS_CAMPAIGN_PARENT": str(self.runs)},
+                  "native_run_id": "nousfixture-run-0001", "expected_artifacts": []}
+        ev = self.adapter.evidence({}, record, self.ctx())
+        self.assertTrue(any(a["location"].endswith("state.json") for a in ev), ev)
+        # KeyError (missing env_set) and TypeError (env_set not a mapping).
+        self.assertEqual(self.adapter.evidence({}, {"expected_artifacts": []}, self.ctx()),
+                         [])
+        self.assertEqual(self.adapter.evidence({}, {"env_set": None,
+                                                    "native_run_id": "x",
+                                                    "expected_artifacts": []},
+                                               self.ctx()), [])
 
     def test_generated_run_id_is_long_unique_and_non_material(self):
         a = self.submit(self.msg(semantics={"run_id": None}))
@@ -645,6 +768,64 @@ class Registry(unittest.TestCase):
         self.assertIn("BLIS apparatus", p["reason"])
         self.assertEqual(p["pin"], PIN)
         self.assertEqual(p["pin_sha"], "e224cc1")
+
+    def test_default_probe_reports_unparseable_configs(self):
+        """A ConfigError from either config layer is a reason, not a crash."""
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = make_repo(tmp)
+        cfg = tmp / "cfg"
+        cfg.mkdir()
+        (cfg / "config.yaml").write_text("engines: [broken\n")
+        ctx = AdapterContext(target=repo, runs_dir=tmp / "runs", prep_dir=tmp / "p",
+                             env={"PATH": "/usr/bin:/bin"})
+        with mock.patch.dict("os.environ", {"INVESTIGATION_CONFIG_HOME": str(cfg)}):
+            p = N.default_probe(ctx)
+        self.assertFalse(p["available"])
+        self.assertIn("machine config:", p["reason"])
+        # A broken committed repo config, with the machine layer healthy:
+        # same treatment, different layer.
+        (cfg / "config.yaml").write_text("engines: {}\n")
+        (repo / "investigations").mkdir()
+        (repo / "investigations" / "config.yaml").write_text("clusters: [broken\n")
+        with mock.patch.dict("os.environ", {"INVESTIGATION_CONFIG_HOME": str(cfg)}):
+            p = N.default_probe(ctx)
+        self.assertFalse(p["available"])
+        self.assertIn("repo config:", p["reason"])
+
+
+class DefaultHooks(unittest.TestCase):
+    """The module-level hooks the shipped adapter uses when no test injects
+    its own: they read the real /proc (or ps) and really run the command."""
+
+    def test_default_list_processes_reads_proc_or_ps(self):
+        out = N.default_list_processes()
+        self.assertIsInstance(out, list)
+        for pid, cmd in out:
+            self.assertIsInstance(pid, int)
+            self.assertIsInstance(cmd, str)
+        # This process is on the list (its own /proc entry is readable).
+        self.assertTrue(any(pid == os.getpid() for pid, _ in out))
+        # The ps fallback parses pid/command pairs and skips junk lines.
+        ps_text = "  123 /bin/sleep x\njunk\n45 cmd here\n"
+        with mock.patch.object(procid, "_proc_usable", return_value=False), \
+             mock.patch.object(procid, "_run_ps", return_value=ps_text):
+            self.assertEqual(N.default_list_processes(),
+                             [(123, "/bin/sleep x"), (45, "cmd here")])
+        # No /proc and a failing ps: a loud error, never a silent [].
+        with mock.patch.object(procid, "_proc_usable", return_value=False), \
+             mock.patch.object(procid, "_run_ps", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "cannot list processes"):
+                N.default_list_processes()
+
+    def test_default_run_cmd_captures_output_and_reports_failures(self):
+        rc, out = N.default_run_cmd([sys.executable, "-c", "print('probe-out')"], {})
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "probe-out")
+        # A missing binary is (-1, message), not an exception.
+        rc, out = N.default_run_cmd(["/definitely-not-a-binary-x"], {})
+        self.assertEqual(rc, -1)
+        self.assertIn("/definitely-not-a-binary-x", out)
 
 
 class CollectModule(unittest.TestCase):
