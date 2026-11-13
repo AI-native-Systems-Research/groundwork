@@ -26,7 +26,7 @@ of them starts.
 
 State lives in `$RUNS/.runtime/` (`runtime.sqlite3`, `prepared/<prep-id>/`,
 `logs/`). That DB is the only authority. `$STUDY/runtime/` holds review
-copies (`export`); copying them grants nothing.
+copies (`RT export`); copying them grants nothing.
 
 ## The flow
 
@@ -68,6 +68,17 @@ submit → prepare → paste card in chat → owner's go quoting the short code
    builds and exports `ains.experiment-result/v1` to
    `$STUDY/runtime/results/<inv-id>.json`.
 
+Two more subcommands exist at any point in the flow, both read-only:
+
+- **`RT show <id> [--json]`** prints a work item, preparation, invocation or
+  message by id (a work id shows its messages, preparations, invocations and
+  events; `--json` prints the whole record). A truncated approval card names
+  it for the full preparation record.
+- **`RT export [--out DIR]`** rewrites `$STUDY/runtime/` review copies from
+  the DB (all requests, preparations, approvals, invocations and results;
+  `--out DIR` writes elsewhere). `result` and `export` write the same
+  review-copy tree; hand edits there are overwritten, never trusted.
+
 Then record the step in `plan.md`'s `## Step log` (below) and stop. The
 runtime never chains: a result never starts anything. Any further launch is
 a new request, a new preparation, a new card and a new go.
@@ -99,6 +110,7 @@ Missing fields are refused, never inferred. Unknown fields are refused.
 | `semantics.models.session` (Nous), `semantics.models{claude, codex}` (Spotlights) | machine config `models: {nous_session, spotlights_claude, spotlights_codex}`; if absent, ask the owner in plain words and offer to save it |
 | `limits` | the plan's cost/size section; keep them small unless the owner said otherwise |
 | `next_step` | the latest `plan.md` step-log entry |
+| `semantics.secrets` | names of env vars the engine needs as credentials, e.g. `OPENAI_API_KEY` (see below) |
 
 Every `blis.knobs` entry must be in the representable set (`method-plan.md`).
 The adapter also scans the question text for unrepresentable topics; that
@@ -111,6 +123,18 @@ step-log entry. Give it on every request after the study's first result:
 card shows it.
 `repeat_of` + `repeat_reason` mark a deliberate rerun of an earlier
 invocation; "the result was negative or inconclusive" is never a reason.
+
+### `semantics.secrets`
+
+The engines get a closed environment: only base vars (PATH, HOME, locale,
+proxy…), the preparation's declared variables and `ANTHROPIC_*`/`CLAUDE_*`
+names. `semantics.secrets` lists env-var **names** (never values) that must
+also reach the engine, and it is the only route for any other credential —
+an undeclared `OPENAI_API_KEY` is silently absent from the engine's
+environment. Presence is material: it is recorded at prepare (present/absent
+only, never the value), shown on the card, part of the approval digest, and
+`launch` refuses when a declared secret's presence or absence changed since
+prepare. Values never appear in any stored record or export.
 
 ## Lifecycle states
 
