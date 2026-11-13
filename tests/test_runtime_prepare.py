@@ -299,6 +299,37 @@ class Approve(Base):
         with self.assertRaisesRegex(AP.ApprovalError, "newer request revision"):
             self.approve(self.res)
 
+    def test_tampered_preparation_record_is_refused(self):
+        # A stored record whose material no longer digests to the recorded
+        # material_digest (a hand-edited or corrupted DB row) must not be
+        # approvable: the code would "match" a record that was never prepared.
+        stored = self.store.get_preparation(self.res.prep_id)
+        rec = dict(stored["record"])
+        rec["material"] = dict(rec["material"], question="tampered?")
+        self.store.conn.execute("UPDATE preparations SET record_json = ?"
+                                " WHERE prep_id = ?",
+                                (json.dumps(rec), self.res.prep_id))
+        self.store.conn.commit()
+        with self.assertRaisesRegex(AP.ApprovalError, "does not match its digest"):
+            self.approve(self.res)
+        self.assertIsNone(self.store.get_approval(self.res.prep_id))
+
+    def test_secret_in_quote_is_refused_without_echoing_it(self):
+        # approve() pre-checks the code and the quote's shape, but the
+        # secret-value scan happens in Store.insert_approval; its StoreError
+        # must surface as an ApprovalError that names the variable without
+        # echoing the secret value.
+        self.env["FAKE_API_TOKEN"] = SECRET
+        try:
+            with self.assertRaisesRegex(AP.ApprovalError, "FAKE_API_TOKEN") as cm:
+                AP.approve(self.store, self.res.prep_id, code=self.res.short_code,
+                           source="chat", quote=go(self.res.short_code) + " " + SECRET,
+                           env=self.env)
+        finally:
+            del self.env["FAKE_API_TOKEN"]
+        self.assertNotIn(SECRET, str(cm.exception))
+        self.assertIsNone(self.store.get_approval(self.res.prep_id))
+
 
 class Revalidate(Base):
     """The pre-launch checks R3's launch calls (spec §7 step 6)."""
@@ -458,6 +489,58 @@ class Card(Base):
         for s in ("invocations recorded in this study: 0", "max_iterations (engine): 3",
                   "### Inferred defaults", "experiment: default"):
             self.assertIn(s, res.card)
+
+
+class CardTruncation(Base):
+    """The >MAX_CARD_BYTES branch: the body is dropped, the pointer kept.
+
+    Every card section clips its values (240 chars) and its item count
+    (MAX_ITEMS), so a card only crosses the bound when many sections are
+    full at once -- the shape a rich adapter produces. The fake adapter's
+    single summary line and one limit can never reach it (the existing
+    `test_card_bounded_and_identical_to_card_md` builds a 4 KB card), so the
+    branch is exercised through an adapter subclass that fills the summary,
+    limits and defaults sections, the way the shipped Nous adapter's
+    campaign fields would.
+    """
+
+    def big_adapter(self):
+        class Big(fake.FakeAdapter):
+            def prepare(self, request, ctx):
+                p = super().prepare(request, ctx)
+                p.summary = [f"summary line {i} " + "s" * 220 for i in range(12)]
+                p.limits = [{"name": f"lim{i}", "value": "v" * 220,
+                             "enforced_by": "engine"} for i in range(12)]
+                p.defaults = [{"field": f"f{i}", "value": "d" * 200,
+                               "reason": "r" * 30} for i in range(12)]
+                return p
+        return Big()
+
+    def test_oversize_card_truncates_body_and_keeps_code_and_pointer(self):
+        prev = A.register(self.big_adapter(), replace=True)
+        self.addCleanup(A.unregister, "nous", prev)
+        self.submit(self.req(question="Why " + "very " * 40 + "slow?",
+                             locks={f"k{i}": "v" * 230 for i in range(12)}))
+        res = self.prepare()
+        card = res.card
+        # The note's presence is the branch condition: the untruncated card
+        # (head + every section + tail) crossed MAX_CARD_BYTES.
+        self.assertIn("card truncated to its size bound", card)
+        self.assertIn(f"`runtime.py show {res.prep_id} --json`", card)
+        # The owner still sees what they are approving: identity, digest, code.
+        self.assertTrue(card.startswith(f"## Approval card: {res.prep_id}"))
+        self.assertIn(res.material_digest, card)
+        self.assertIn(f"approve {res.prep_id} --code {res.short_code}", card)
+        # The bound holds after truncation, and card.md stays byte-identical.
+        self.assertLessEqual(len(card.encode("utf-8")), AP.MAX_CARD_BYTES)
+        self.assertEqual(res.card_path.read_text(encoding="utf-8"), card)
+        # The oversized body sections were the ones dropped: the summary lines
+        # the big adapter added are gone, but the head sections survive.
+        self.assertNotIn("summary line 11", card)
+        self.assertIn("### What runs", card)
+        self.assertIn("### Semantics and locks", card)
+        # ... and the truncated card is still a usable approval: it approves.
+        self.approve(res)
 
 
 class Secrets(Base):
