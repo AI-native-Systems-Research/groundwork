@@ -5,7 +5,9 @@ tests/fixtures/runtime/fake_engines/. Every wait is bounded (wait_for), and
 tearDown SIGKILLs every process whose command line contains this test's
 temp-dir name (supervisors, engines, their children).
 """
+import contextlib
 import inspect
+import io
 import json
 import multiprocessing as mp
 import os
@@ -54,7 +56,9 @@ class Base(unittest.TestCase):
         self.addCleanup(restore)
         self.env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                     "HOME": str(self.tmp), "UNRELATED_VAR": "do-not-pass",
-                    "CLAUDE_CODE_ENTRYPOINT": "cli", "FAKE_API_TOKEN": SECRET}
+                    "CLAUDE_CODE_ENTRYPOINT": "cli", "FAKE_API_TOKEN": SECRET,
+                    **{k: v for k, v in os.environ.items()
+                     if k.startswith("COVERAGE_")}}
         self.n = 0
 
     def _cleanup(self):
@@ -581,6 +585,154 @@ class Cancel(Base):
         self.assertEqual(res["cancel"]["mechanism"], "sigint")
         v = self.terminal(inv)
         self.assertEqual((v["state"], v["exit_code"]), ("cancelled", 130))
+
+
+# --- supervise(): the guard branches ----------------------------------------------
+# In-process calls: the test runner imports supervisor.py, so these branches
+# are measured directly (no child, no SIGKILL tail). Each test drives one
+# guard that the end-to-end launches above never reach, because the state it
+# guards against has to be manufactured by hand. A spawned supervisor logs to
+# its redirected stdout; here we capture the same stream and assert it.
+
+class Supervise(Base):
+    def supervise(self, *args, **kw):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = SV.supervise(*args, **kw)
+        return rc, buf.getvalue()
+
+    def test_unknown_invocation_returns_2(self):
+        rc, log = self.supervise(self.store, "inv-nope", env=self.env)
+        self.assertEqual(rc, 2)
+        self.assertIn("no reserved invocation 'inv-nope'", log)
+
+    def test_invocation_without_a_launch_spec_returns_2(self):
+        prep = self.approved("succeed")
+        SV.reserve(self.store, prep, env=self.env, inv_id="inv-nospec")
+        # Drop the launch spec the reservation stored: nothing to spawn.
+        self.store.conn.execute("UPDATE invocations SET launch_json = NULL WHERE "
+                                "inv_id = ?", ("inv-nospec",))
+        self.store.conn.commit()
+        rc, log = self.supervise(self.store, "inv-nospec", env=self.env)
+        self.assertEqual(rc, 2)
+        self.assertIn("no reserved invocation", log)
+
+    def test_invocation_owned_by_another_supervisor_returns_1(self):
+        prep = self.approved("succeed")
+        inv_id, _, _ = SV.reserve(self.store, prep, env=self.env,
+                                  inv_id="inv-owned")
+        self.store.transition(inv_id, (SV.RESERVED,), SV.RESERVED,
+                              supervisor_pid=999999, supervisor_start="x")
+        rc, log = self.supervise(self.store, inv_id, env=self.env)
+        self.assertEqual(rc, 1)
+        self.assertIn("belongs to supervisor 999999", log)
+        # The reservation is untouched: not consumed by a refusal.
+        self.assertEqual(self.store.get_invocation(inv_id)["state"], SV.RESERVED)
+        self.assertEqual(self.starts(), [])
+
+    def test_invocation_past_reserved_returns_1(self):
+        prep = self.approved("succeed")
+        inv_id, _, _ = SV.reserve(self.store, prep, env=self.env,
+                                  inv_id="inv-past")
+        self.store.transition(inv_id, (SV.RESERVED,), SV.EXITED, exit_code=0,
+                              ended_at=S.now())
+        rc, log = self.supervise(self.store, inv_id, env=self.env)
+        self.assertEqual(rc, 1)
+        self.assertIn("is exited, not reserved", log)
+        self.assertEqual(self.store.get_invocation(inv_id)["state"], SV.EXITED)
+        self.assertEqual(self.starts(), [])
+
+    def test_unspawnable_engine_marks_the_invocation_failed(self):
+        prep = self.approved("succeed")
+        inv_id, _, _ = SV.reserve(self.store, prep, env=self.env,
+                                  inv_id="inv-unspawnable")
+        spec = self.store.get_invocation(inv_id)["launch"]
+        spec["argv"] = ["/nonexistent/engine", "run"]   # Popen raises OSError
+        # supervise() writes the engine log itself; spawn_supervisor normally
+        # creates the dir, so do it by hand for this in-process call.
+        SV.logs_dir(self.store).mkdir(parents=True, exist_ok=True)
+        from ains_runtime.canonical import canonical_json
+        self.store.conn.execute("UPDATE invocations SET launch_json = ? WHERE "
+                                "inv_id = ?", (canonical_json(spec), "inv-unspawnable"))
+        self.store.conn.commit()
+        rc, log = self.supervise(self.store, inv_id, env=self.env)
+        self.assertEqual(rc, 1)
+        self.assertIn("engine spawn failed", log)
+        inv = self.store.get_invocation(inv_id)
+        self.assertEqual(inv["state"], SV.FAILED)
+        # The reason is an event detail; the native record says what failed.
+        events = [e for e in self.store.list_events(entity_id=inv_id)
+                  if e["event"] == f"state:{SV.FAILED}"]
+        self.assertEqual(events[-1]["detail"]["reason"], "engine spawn failed")
+        self.assertIn("engine spawn failed", inv["native"]["reason"])
+        self.assertEqual(inv["native"]["state"], SV.FAILED)
+        self.assertEqual(self.starts(), [])
+
+    def test_cancel_requested_before_spawn_cancels_without_starting(self):
+        prep = self.approved("succeed")
+        inv_id, _, _ = SV.reserve(self.store, prep, env=self.env,
+                                  inv_id="inv-precancel")
+        SV.logs_dir(self.store).mkdir(parents=True, exist_ok=True)
+        self.store.request_cancel(inv_id, {"reason": "test"})
+        rc, log = self.supervise(self.store, inv_id, env=self.env)
+        self.assertEqual(rc, 0)
+        self.assertIn("cancel requested before spawn; engine not started", log)
+        inv = self.store.get_invocation(inv_id)
+        self.assertEqual(inv["state"], SV.CANCELLED)
+        events = [e for e in self.store.list_events(entity_id=inv_id)
+                  if e["event"] == f"state:{SV.CANCELLED}"]
+        self.assertEqual(events[-1]["detail"]["reason"],
+                         "cancel requested before the engine was spawned; "
+                         "nothing ran")
+        self.assertEqual(self.starts(), [])
+
+    def test_engine_spawned_out_of_band_records_an_event_not_a_state(self):
+        prep = self.approved("succeed")
+        inv_id, _, _ = SV.reserve(self.store, prep, env=self.env,
+                                  inv_id="inv-oob")
+        SV.logs_dir(self.store).mkdir(parents=True, exist_ok=True)
+        # The engine races the supervisor into `running`: the transition to
+        # SPAWNING must succeed, the one to RUNNING must not, and the pid is
+        # recorded as an event instead.
+        real_transition = self.store.transition
+
+        def racing_transition(inv, from_states, state, **kw):
+            if state == SV.SPAWNING:
+                if not real_transition(inv, from_states, state, **kw):
+                    return False
+                # Another actor wins the RUNNING hop before the engine starts.
+                real_transition(inv, (SV.SPAWNING,), SV.RUNNING,
+                                engine_pid=424242, engine_start="start-x")
+                return True
+            if state == SV.RUNNING:
+                return real_transition(inv, (SV.SPAWNING,), state, **kw)
+            return real_transition(inv, from_states, state, **kw)
+
+        with mock.patch.object(self.store, "transition", racing_transition):
+            rc, log = self.supervise(self.store, inv_id, env=self.env)
+        self.assertEqual(rc, 0)
+        self.assertIn("state already changed; not recorded", log)
+        inv = self.store.get_invocation(inv_id)
+        events = [e["event"] for e in self.store.list_events(entity_id=inv_id)]
+        self.assertIn("engine_spawned_out_of_band", events)
+        # The out-of-band winner's identity stands; the engine's own exit is
+        # not recorded on top of it (the where-clause on engine_pid fails).
+        self.assertEqual(inv["engine_pid"], 424242)
+        self.assertEqual(inv["state"], SV.RUNNING)
+        self.assertIsNone(inv["exit_code"])
+        self.assertNotIn(f"state:{SV.EXITED}", events)
+
+    def test_main_supervise_reports_an_unopenable_db(self):
+        # The private CLI entry: a db that does not exist is a usage error
+        # (exit 2), not a traceback. Runs as a subprocess like launch does,
+        # with the same env, so it is measured via the COVERAGE_* pass-through.
+        env = {**self.env, "AINS_RUNTIME_TEST_ONLY_CRASH_AT": ""}
+        r = subprocess.run([sys.executable, str(FAKE_CLI), "--db",
+                            str(self.tmp / "no-such" / "db.sqlite"),
+                            "_supervise", "inv-nope"],
+                           capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("_supervise:", r.stderr)
 
 
 # --- limits -----------------------------------------------------------------------

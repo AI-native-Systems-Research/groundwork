@@ -98,7 +98,9 @@ class Base(unittest.TestCase):
         prev = A.register(self.adapter, replace=True)
         self.addCleanup(A.unregister, SS.CAPABILITY, prev)
         self.env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.tmp),
-                    "CLAUDE_CODE_ENTRYPOINT": "cli"}
+                    "CLAUDE_CODE_ENTRYPOINT": "cli",
+                    **{k: v for k, v in os.environ.items()
+                     if k.startswith("COVERAGE_")}}
         self.n = 0
 
     def _cleanup(self):
