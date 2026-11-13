@@ -31,11 +31,15 @@ def all_bytes(root: Path) -> bytes:
 
 class EnvPolicy(unittest.TestCase):
     def test_secret_names(self):
-        # True: the keyword is a whole _-delimited segment (or the whole name).
+        # True: the keyword is a whole _-delimited segment (or the whole name),
+        # optionally flanked by digits inside the segment (KEY2/2KEY/SECRET1 --
+        # the standard rotated/second-credential convention, issue #21).
         for n in ("ANTHROPIC_API_KEY", "GH_TOKEN", "DB_PASSWORD", "X_AUTH",
                   "my_secret", "PROM_TOKEN", "AUTH_TOKEN", "MY_SECRET_VALUE",
                   "API_KEY", "GITHUB_TOKEN", "SECRET", "AWS_SECRET_ACCESS_KEY",
-                  "SSH_AUTH_SOCK", "TOKEN_COUNT"):
+                  "SSH_AUTH_SOCK", "TOKEN_COUNT",
+                  "GITHUB_TOKEN2", "API_KEY2", "OPENAI_API_KEY2", "KEY2",
+                  "2KEY", "SECRET1", "PASSWORD8", "AUTH7", "ANTHROPIC_KEY2"):
             self.assertTrue(envpolicy.is_secret_name(n), n)
         # False: ordinary names whose *substrings* contain a keyword but whose
         # _-delimited segments never equal one (regression: an unanchored
@@ -44,8 +48,15 @@ class EnvPolicy(unittest.TestCase):
         for n in ("HOME", "PATH", "CLAUDE_CODE_ENTRYPOINT", "NOUS_CAMPAIGN_PARENT",
                   "GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME", "GIT_AUTHOR_EMAIL",
                   "GIT_COMMITTER_EMAIL", "WEBAUTH_URL", "AUTHORIZED_KEYS",
-                  "WEBAUTHN", "AUTHORIZATION", "MYTOKEN", "MY-TOKEN", "TOKEN123"):
+                  "WEBAUTHN", "AUTHORIZATION", "MYTOKEN", "MY-TOKEN",
+                  "AUTHOR", "AUTHORS", "KEYSTONE", "MONKEY", "KEYNOTE"):
             self.assertFalse(envpolicy.is_secret_name(n), n)
+        # TOKEN123 pins the chosen direction for digit-glued placeholder-style
+        # names: fail-closed (secret-named), matching TOKEN_COUNT's accepted
+        # behavior. MYTOKEN2 stays False -- the digits must glue to a keyword
+        # that is already a whole segment, not rescue a glued substring.
+        self.assertTrue(envpolicy.is_secret_name("TOKEN123"))
+        self.assertFalse(envpolicy.is_secret_name("MYTOKEN2"))
 
     def test_short_values_ignored(self):
         self.assertEqual(envpolicy.secret_values(ENV), {"FAKE_API_TOKEN": SECRET})
