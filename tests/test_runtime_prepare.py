@@ -240,7 +240,12 @@ class Approve(Base):
             dict(code="", quote=go(code)),
             dict(code="0" * 12 if code != "0" * 12 else "1" * 12, quote=go(code)),
             dict(code=code[:6], quote=go(code)),
-            dict(code=code.upper(), quote=go(code)),
+            # Upper-cased code: wrong unless the code happens to be all digits
+            # (~1 in 275 preparations — the case flip is then a no-op and this
+            # "bad" entry would be the right code, failing the test), so fall
+            # back to a code that differs from it in the first character.
+            dict(code=code.upper() if code != code.upper()
+                 else ("1" if code[0] != "1" else "2") + code[1:], quote=go(code)),
             dict(code=code, quote=None),
             dict(code=code, quote="   "),
             dict(code=code, quote="yes go"),  # quote lacks the code
