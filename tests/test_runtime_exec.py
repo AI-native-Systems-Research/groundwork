@@ -154,6 +154,34 @@ class ProcId(Base):
         self.assertEqual(self.store.list_invocations(), [])
         self.assertIsNone(self.store.get_approval(prep)["consumed_at"])  # not consumed
 
+    def test_engine_argv_normalizes_the_interpreter_path(self):
+        # CPython keeps the spelling the interpreter was invoked with (e.g.
+        # ../venv/bin/python) in the parent's sys.executable, while every
+        # spawned child normalizes it. argv is part of the material digest,
+        # so a preparation built from the raw spelling can never digest-match
+        # a revalidation rebuilt in a child ("material rebuilt ... differs").
+        # engine_argv() therefore returns the abspath.
+        argv = fake.engine_argv("succeed")
+        self.assertEqual(argv[0], os.path.abspath(sys.executable), argv)
+        self.assertEqual(argv[1], str(ENGINES / "succeed.py"), argv)
+        self.assertEqual(fake.engine_argv(None), ["fake-engine"])
+        self.assertEqual(fake.engine_argv("no-such-engine"), ["fake-engine"])
+
+        # End to end: a preparation built while sys.executable was spelled
+        # with a redundant ".." must still launch under the normalized
+        # spelling (what a spawned CLI child process sees), because both
+        # sides digest the same abspath.
+        exe = os.path.abspath(sys.executable)
+        if not Path(exe).parent.name:  # exe directly under / (never in CI)
+            self.skipTest("sys.executable has no named parent directory")
+        dotted = str(Path(exe).parent / ".." / Path(exe).parent.name / Path(exe).name)
+        self.assertEqual(os.path.abspath(dotted), exe)
+        with mock.patch.object(sys, "executable", dotted):
+            prep = self.approved("succeed")
+        res = self.launch(prep)
+        st = self.terminal(res.inv_id)
+        self.assertEqual(st["state"], "completed", st)
+
     def test_argv_matching(self):
         argv = [sys.executable, "/x/eng.py", "run", "/p/c.yaml", "--run-id", "r1"]
         self.assertTrue(procid.argv_matches(" ".join(argv), argv))
