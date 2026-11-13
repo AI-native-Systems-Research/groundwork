@@ -6,6 +6,7 @@ chosen by the PromQL text. Nothing here talks to a real cluster.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -340,6 +341,71 @@ class TestTokenLeak(Base):
                     n += 1
                     self.assertNotIn(TOKEN.encode(), f.read_bytes(), f)
         self.assertGreater(n, 3)
+
+    def test_failed_query_raw_body_is_redacted(self):
+        # The one path that used to bypass redact(): run() writes the raw HTTP
+        # body byte-for-byte even when the query FAILED, and an error body can
+        # echo the Authorization header (a misbehaving gateway). The written
+        # prom/<name>.json must not carry the token; the body is still kept as
+        # evidence, with just the secret masked.
+        token = "echoed-TOKEN-value-9f1c2b"
+        q = self.tmp / "q.yaml"
+        q.write_text("good: vllm_running\nbad: syntax_error(\n")
+        body = (b'{"status":"error","errorType":"bad_data","error":"bad query; '
+                b"your Authorization header was Bearer " + token.encode() + b'"}')
+        seen = []
+
+        class EchoAuth(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                form = urllib.parse.parse_qs(self.rfile.read(n).decode())
+                seen.append(self.headers.get("Authorization"))
+                if "vllm_running" in form["query"][0]:
+                    code, out = 200, (FIX / "query_range-vllm_running.json").read_bytes()
+                else:
+                    code, out = 400, body
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), EchoAuth)
+        th = threading.Thread(target=srv.serve_forever, daemon=True)
+        th.start()
+        try:
+            env = {**self.env, "PROM_TOKEN": token}
+            r = self.run_cli("--url", f"http://127.0.0.1:{srv.server_address[1]}",
+                             "--token-env", "PROM_TOKEN", "--queries", str(q), env=env)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"Bearer {token}", seen)                  # token sent
+        self.assertNotIn(token, r.stdout + r.stderr)
+        # The failed query's raw body is written (evidence), but redacted.
+        raw = (self.cap_dir() / "prom/bad.json").read_bytes()
+        self.assertIn(b'"errorType":"bad_data"', raw)          # still evidence
+        self.assertNotIn(token.encode(), raw)                   # token masked
+        self.assertIn(b"Bearer ***", raw)
+        self.assertIn(token, json.loads(body)["error"])         # server did echo it
+        # And not just the literal token: no bearer-token-shaped material
+        # survives anywhere in the raw body (only "Bearer ***").
+        self.assertIsNone(re.search(rb"Bearer\s+[A-Za-z0-9][A-Za-z0-9_.\-]{6,}", raw))
+        # The good query's raw body stays byte-for-byte.
+        self.assertEqual((self.cap_dir() / "prom/good.json").read_bytes(),
+                         (FIX / "query_range-vllm_running.json").read_bytes())
+        # summary.json / capture.json never see the token either, and no file
+        # anywhere under the study or the runs dir carries it.
+        self.assertNotIn(token, (self.cap_dir() / "summary.json").read_text())
+        self.assertNotIn(token, (self.cap_dir() / "capture.json").read_text())
+        for root in (self.study, self.runs):
+            for f in root.rglob("*"):
+                if f.is_file():
+                    self.assertNotIn(token.encode(), f.read_bytes(), f)
 
     def test_missing_token_env_fails_cleanly(self):
         env = {k: v for k, v in self.env.items() if k != "PROM_TOKEN"}
