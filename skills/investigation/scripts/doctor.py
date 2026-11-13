@@ -47,7 +47,7 @@ ENGINES = {
     "nous": ("nous", "nous", "nous-pin"),
     "spotlights-engine": ("spotlights-engine", "spotlights_engine", "spotlights-pin"),
     "signal-pipeline": ("signal-pipeline", "spotlights_engine", "spotlights-pin"),
-    "sim2real": ("sim2real", None, None),
+    "sim2real": ("sim2real", None, "sim2real-pin"),
 }
 
 SPOTLIGHTS_TELEMETRY_REASON = (
@@ -91,7 +91,7 @@ def read_pins(skill_md: Path = SKILL_DIR / "SKILL.md") -> dict:
         del pins[key]
     try:
         import upstreams
-        for name in ("nous", "spotlights"):
+        for name in ("nous", "spotlights", "sim2real"):
             pins[f"{name}-pin"] = upstreams.pin(name)
     except Exception:  # an unreadable lock: engine checks then report "no pin"
         pass

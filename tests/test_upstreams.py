@@ -63,7 +63,7 @@ class LockAndFacts(unittest.TestCase):
         self.assertRegex(U.entry("blis")["catalog"]["commit"], r"\A[0-9a-f]{40}\Z")
 
     def test_engine_commits_are_full(self):
-        for name in ("nous", "spotlights"):
+        for name in ("nous", "spotlights", "sim2real", "vllm", "llm-d-router"):
             self.assertRegex(U.entry(name)["commit"], r"\A[0-9a-f]{40}\Z")
 
 
@@ -91,6 +91,37 @@ class NoRestatedUpstreamFacts(unittest.TestCase):
             for s in shas:
                 with self.subTest(file=str(path.relative_to(ROOT)), sha=s):
                     self.assertNotIn(s, text)
+
+    def test_banner_shas_are_locked(self):
+        """Every version banner in the shipped reference docs and assets cites
+        a commit lock.json holds, so a lock bump can flag banner drift (the
+        gap guide's beads 1a88cf82-187 / e4fa169d-27e recorded four banners no
+        lock entry covered). The one exception is spotlights.md's `e7aff25`:
+        an unpushed `skill/spotlights-run` branch commit that the design's
+        pin policy (docs/design-v2.md) says is never pinned — the banner must
+        keep saying so inline, and the operative facts record is
+        spotlights.json's verified_against (the v0.1.1 pin), not the banner."""
+        banners = {
+            "references/sim2real.md": ["28a8e98"],
+            "references/telemetry.md": ["2f1cba799e", "618eb0a9"],
+            "assets/promql/starter.yaml": ["2f1cba799e", "618eb0a9"],
+        }
+        for rel, shas in banners.items():
+            text = (SKILL / rel).read_text()
+            for sha in shas:
+                with self.subTest(file=rel, sha=sha):
+                    self.assertIn(sha, text)
+                    owner = next((n for n in U.lock()
+                                  if str(U.entry(n).get("commit", "")).startswith(sha)), None)
+                    self.assertIsNotNone(
+                        owner, f"{rel}: banner sha {sha} is not in lock.json; "
+                        "add an entry (with a facts file) or fix the banner")
+        # The unpinnable spotlights banner keeps its self-qualifying text.
+        text = (SKILL / "references" / "spotlights.md").read_text()
+        self.assertIn("e7aff25", text)
+        self.assertIn("not the `v0.1.1`", text)
+        self.assertNotIn("e7aff25", json.dumps(U.lock()),
+                         "an unpushed branch commit must never be pinned")
 
     def test_no_upstream_line_citations_in_code(self):
         for path in self.SCAN:

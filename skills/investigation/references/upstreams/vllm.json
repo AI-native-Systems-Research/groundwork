@@ -1,0 +1,25 @@
+{
+  "_doc": "Facts about vLLM at the locked commit. vLLM is a metric-name source only: nothing of it is installed or launched, and the lock exists so the Prometheus names in assets/promql/starter.yaml and references/telemetry.md can't drift from a version nobody re-checked. Re-verify every entry when the lock changes.",
+  "verified_against": "vllm@ac2f3bc75141",
+  "verified_on": "2026-11-13",
+  "facts": {
+    "counter_cls": {
+      "value": "prometheus_client.Counter",
+      "source": "vllm/v1/metrics/loggers.py PrometheusStatLogger._counter_cls; a prometheus_client.Counter appends `_total` on exposition, which is why the starter list scrapes vllm:num_preemptions, vllm:prefix_cache_hits, vllm:prefix_cache_queries, vllm:external_prefix_cache_hits and vllm:external_prefix_cache_queries with a _total suffix (loggers.py:662, 596, 585, 621, 609)"
+    },
+    "histogram_cls": {
+      "value": "prometheus_client.Histogram",
+      "source": "vllm/v1/metrics/loggers.py PrometheusStatLogger._histogram_cls; every _bucket query's base is a Histogram, so _bucket is exposed implicitly"
+    },
+    "counters_scraped_with_total": {
+      "value": ["vllm:num_preemptions_total", "vllm:prefix_cache_hits_total",
+                "vllm:prefix_cache_queries_total", "vllm:external_prefix_cache_hits_total",
+                "vllm:external_prefix_cache_queries_total"],
+      "source": "declared without the suffix at vllm/v1/metrics/loggers.py:662 (num_preemptions), 596 (prefix_cache_hits), 585 (prefix_cache_queries), 621/609 (external_*); the suffix comes from counter_cls"
+    },
+    "no_pod_label": {
+      "value": "pod comes from Prometheus' Kubernetes scrape relabeling, not vLLM",
+      "source": "vllm/v1/metrics/loggers.py: vLLM sets model_name and engine labels only; by (pod) queries return data under one empty-pod series if a cluster's relabeling differs"
+    }
+  }
+}
