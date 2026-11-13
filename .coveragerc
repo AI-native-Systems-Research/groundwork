@@ -6,7 +6,14 @@
 ; collect_telemetry.py and new_study.py are only ever run as subprocesses and
 ; read 0% unless their children are traced.
 [run]
-source = skills/investigation/scripts
+; scripts/ is included because scripts/check_skill_spec.py is itself a CI gate
+; (the `spec` job runs it) and finding #8 showed it could sit at 0% invisible
+; to the coverage floor; same class as #2 (verify_upstreams.py) and #3
+; (doctor.py parsers). Issue #10 proposed widening the scope so the repo's own
+; Python is measured wherever it lives.
+source =
+    skills/investigation/scripts
+    scripts
 parallel = True
 ; subprocess: write a data file for each child that inherits COVERAGE_PROCESS_START.
 ; _exit: flush data when a child ends via os._exit() instead of a normal return.
@@ -15,11 +22,12 @@ patch =
     _exit
 
 [report]
-; Current level is 81% over skills/investigation/scripts, so this floor sits ~1
-; point below it. That narrow margin is what makes a total-only gate enough to
-; catch the regression this guards against: any file of ~100+ statements
-; dropping to 0% pushes the total under 80 and fails the build. Raise the floor
-; as coverage grows, and keep the margin thin, or add per-file --include floors.
+; Total-only floor. At ~89% total (measured over both source dirs) a
+; ~126-statement file dropping to 0% moves the total by under 2 points and
+; this stays green — which is exactly how #2, #3 and #8 each went unnoticed.
+; The per-file floor that catches that class is enforced separately by
+; scripts/check_coverage_floor.py (issue #10), so keep this number total-only
+; and raise it as total coverage grows.
 fail_under = 80
 exclude_also =
     if __name__ == .__main__.:
