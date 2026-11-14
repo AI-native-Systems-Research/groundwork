@@ -385,6 +385,41 @@ class TestMethods(unittest.TestCase):
         self.assertFalse(m["telemetry-snapshot"]["available"])  # no kubectl, no url
         self.assertFalse(m["spotlights-telemetry"]["available"])  # by design
 
+    def test_spotlights_telemetry_reason_names_the_stage01_fact_filenames(self):
+        # The reason is built from the stage01_inputs fact, so the filenames
+        # it names are the ones spotlights.json holds (cited to the locked
+        # commit) — not a prose restatement that can drift on a lock bump.
+        m = self.methods()
+        reason = m["spotlights-telemetry"]["reason"]
+        import upstreams as U
+        f = U.fact("spotlights", "stage01_inputs")
+        self.assertIn(f["otel_discriminator"], reason)
+        self.assertIn(f["signals_files"][0], reason)
+        self.assertEqual(reason, doctor._spotlights_telemetry_reason())
+        # The fact-sourced build must equal the literal fallback: when the
+        # facts file is unreadable doctor still reports the same words.
+        self.assertEqual(reason, doctor.SPOTLIGHTS_TELEMETRY_REASON)
+
+    def test_spotlights_telemetry_reason_falls_back_when_facts_unreadable(self):
+        # doctor must still report with a broken/unreadable upstreams folder
+        # (same resilience as read_pins); the fallback is the literal.
+        import builtins
+        real_import = builtins.__import__
+
+        def blocked(name, *a, **k):
+            if name == "upstreams":
+                raise ImportError("blocked")
+            return real_import(name, *a, **k)
+
+        builtins.__import__ = blocked
+        try:
+            reason = doctor._spotlights_telemetry_reason()
+        finally:
+            builtins.__import__ = real_import
+        self.assertEqual(reason, doctor.SPOTLIGHTS_TELEMETRY_REASON)
+        self.assertIn("traces.jsonl", reason)
+        self.assertIn("01_signals.json", reason)
+
     def test_git_missing_disables_code_reading(self):
         tools = dict(self.TOOLS, git={"path": None})
         m = self.methods(tools=tools)
