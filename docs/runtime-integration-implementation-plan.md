@@ -2,9 +2,12 @@
 
 Status: Accepted and implemented. The owner accepted the spec and this plan on
 2026-11-09 ([runtime-integration-spec.md](runtime-integration-spec.md) §Status,
-cited below as "spec §N"), and Milestone A shipped the same day: phases R0–R9
-carry their own "Status: done (2026-11-09)" markers below, `ains_runtime/` and
-`scripts/runtime.py` are on `main`, and later PRs have extended them since.
+cited below as "spec §N"). Milestone A shipped that day for Nous and Spotlights
+static; the telemetry phases (R6a/R6) are held under owner decision D10 and
+R9's real runs still await the owner's approval, so Milestone A is not yet
+complete — the phase status markers below record what shipped and what
+stayed open. `ains_runtime/` and `scripts/runtime.py` are on `main`, and later
+PRs have extended them since.
 
 This plan breaks Milestone A into eleven PR-sized phases (R0–R9, plus R6a) and Milestone B
 into two (B1–B2). Each phase leaves the branch green: `scripts/ci-local.sh`
