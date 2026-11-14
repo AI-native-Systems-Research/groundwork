@@ -9,6 +9,8 @@ import os
 import re
 import shutil
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -597,6 +599,93 @@ class TestHttpResponseClassification(Base):
         self.assertIn("***", cap["failed_queries"][self.BAD])
         self.assertNotIn(token, r.stdout + r.stderr)
         self.assertNotIn(token, (self.cap_dir() / "capture.json").read_text())
+
+
+class TestHTTPErrorBodyReadFailure(Base):
+    """A server (or proxy) that answers an HTTP error status and then breaks
+    the connection mid-body must not crash the CLI: the body read is transport
+    I/O that can fail after the status line, so it is classified as that
+    query's request failure (a partial capture), like any unreachable server.
+    Both abort shapes a broken peer produces are covered: an RST (raises
+    ConnectionResetError, an OSError) and an orderly close short of the
+    announced Content-Length (raises http.client.IncompleteRead, an
+    HTTPException that is NOT an OSError)."""
+
+    BAD = "bad"     # any query whose promql is not vllm_running gets the abort
+
+    @staticmethod
+    def handler_for(mode):
+        ok = (FIX / "query_range-vllm_running.json").read_bytes()
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                form = urllib.parse.parse_qs(self.rfile.read(n).decode())
+                if "vllm_running" in form["query"][0]:
+                    code, out = 200, ok
+                    self.send_response(code)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(out)))
+                    self.end_headers()
+                    self.wfile.write(out)
+                    return
+                # A 403 with an announced-but-never-delivered body: this
+                # sandbox's egress proxy shape (cleartext non-loopback).
+                self.send_response(403)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", "500")
+                self.end_headers()
+                self.wfile.write(b"<html>forbidden</html>" * 4)
+                time.sleep(0.05)
+                if mode == "reset":
+                    # SO_LINGER 0: the next close sends an RST, so the
+                    # client's e.read() raises ConnectionResetError.
+                    self.connection.setsockopt(
+                        socket.SOL_SOCKET, socket.SO_LINGER,
+                        struct.pack("ii", 1, 0))
+                # Either way (RST or FIN) the body never arrives in full.
+                self.close_connection = True
+                self.connection.close()
+        return H
+
+    def capture(self, mode):
+        q = self.tmp / "q.yaml"
+        q.write_text("good: vllm_running\nbad: up(1)\n")
+        handler = self.handler_for(mode)
+        with FakeServer(handler) as p:
+            r = self.run_cli("--url", p.url, "--queries", str(q))
+        return r
+
+    def test_reset_mid_error_body_is_a_per_query_failure(self):
+        r = self.capture("reset")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"failed: {self.BAD}", r.stdout)
+        cap = json.loads((self.cap_dir() / "capture.json").read_text())
+        self.assertIn("HTTP 403", cap["failed_queries"][self.BAD])
+        self.assertIn("body read failed", cap["failed_queries"][self.BAD])
+        self.assertIn("ConnectionResetError", cap["failed_queries"][self.BAD])
+        # A partial failure, not a total one: the good query is still captured.
+        self.assertEqual([p.name for p in (self.cap_dir() / "prom").iterdir()],
+                         ["good.json"])
+        # The CLI must not die with a traceback over this.
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertNotIn("Traceback", r.stdout)
+
+    def test_truncated_error_body_is_a_per_query_failure(self):
+        r = self.capture("truncate")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"failed: {self.BAD}", r.stdout)
+        cap = json.loads((self.cap_dir() / "capture.json").read_text())
+        self.assertIn("HTTP 403", cap["failed_queries"][self.BAD])
+        self.assertIn("body read failed", cap["failed_queries"][self.BAD])
+        self.assertIn("IncompleteRead", cap["failed_queries"][self.BAD])
+        self.assertEqual([p.name for p in (self.cap_dir() / "prom").iterdir()],
+                         ["good.json"])
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertNotIn("Traceback", r.stdout)
 
 
 class TestRunGuards(Base):
