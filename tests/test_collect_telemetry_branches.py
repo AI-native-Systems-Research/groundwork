@@ -14,8 +14,10 @@ silently changes what a study's claims say.
 These tests import the module in-process (the house pattern of
 tests/test_doctor_inprocess.py / tests/test_store_guards.py — no
 subprocess, no env scrubbing, every line counts) and drive the branch
-conditions directly with small capture dicts built in a tempdir. The
-fixture cap-a is reused only where its real sha256s matter.
+conditions directly with small capture dicts built in a tempdir. Every
+sha256 is computed from files the test builds itself, so no fixture is
+needed; the subprocess-level fixture cap-a stays in
+test_collect_telemetry.py, which drives the happy path end to end.
 
 Run from the repo root:  python3 -m unittest tests.test_collect_telemetry_branches -v
 """
@@ -29,7 +31,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "skills" / "investigation" / "scripts"
 SCRIPT = SCRIPTS / "collect_telemetry.py"
-CAP = Path(__file__).resolve().parent / "fixtures" / "telemetry" / "cap-a"
 
 sys.path.insert(0, str(SCRIPTS))
 import collect_telemetry as CT  # noqa: E402
@@ -98,7 +99,7 @@ class VerifyIntegrityTest(unittest.TestCase):
         (the size guard's shape): the first loop skips it (108) and the
         moved loop checks the relocated file, so it is checked exactly
         once and the capture stays ok."""
-        runs = self.dir.parent / "runs"
+        runs = self.dir / "runs"
         runs.mkdir(exist_ok=True)
         dest = runs / "q.json"
         (self.dir / "prom" / "q.json").rename(dest)
