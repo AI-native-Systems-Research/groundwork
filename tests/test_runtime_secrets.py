@@ -11,11 +11,18 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _runtime_fake_adapter as fake  # noqa: E402
 from _runtime_util import RUNTIME, envelope, request  # noqa: E402
+from ains_runtime import approval as AP  # noqa: E402
 from ains_runtime import envpolicy  # noqa: E402
+from ains_runtime import preparation as P  # noqa: E402
+from ains_runtime import recovery as R  # noqa: E402
 from ains_runtime import store as S  # noqa: E402
+from ains_runtime import supervisor as SV  # noqa: E402
+from ains_runtime.adapters.base import NativeState  # noqa: E402
 from ains_runtime.contracts import validate_message  # noqa: E402
 from ains_runtime.export import export_study  # noqa: E402
+from test_runtime_prepare import git, go, make_repo  # noqa: E402
 
 SECRET = "sk-planted-7f3e9a1c55d04b2e"
 ENV = {"FAKE_API_TOKEN": SECRET, "HOME": "/home/x", "SHORT_KEY": "abc"}
@@ -275,6 +282,163 @@ class EventGuards(unittest.TestCase):
                    "cancel:requested"):
             self.assertIn(ev, evs)
         self.assert_nowhere()
+
+
+class EngineNativeRedaction(unittest.TestCase):
+    """reconcile's classification path REDACTS engine-authored native text
+    that quotes a secret value, instead of letting the store's env-keyed
+    guard refuse it.
+
+    The engine is spawned with the secret values (supervisor.engine_env
+    passes env_pass through, and env_pass_names includes the request's
+    secret_vars), so an adapter's classify() — built from engine artifacts
+    like halt.json's message — can quote a token in its reason/warnings.
+    Before this fix both faces of one root cause:
+
+      wedge: with the secret in the caller's env, the transition was
+             REFUSED, the invocation stayed `running` forever, and cancel
+             (which reconciles first) was blocked too;
+      leak:  with the secret absent (cron, second shell, post-rotation),
+             nothing matched, and the token persisted verbatim into
+             events.detail_json and invocations.native_json — the
+             append-only events table cannot be scrubbed, and export_study
+             shipped it to disk.
+
+    The fix runs find_secret_values over the adapter-built native dict
+    BEFORE store.transition and replaces offending strings (precedent:
+    cancel's redaction of adapter results, recovery.py). The env-keyed
+    refusal stays for operator-typed detail (EventGuards above)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(self._cleanup)
+        self.repo = make_repo(self.tmp)
+        self.commit = git(self.repo, "rev-parse", "HEAD")
+        self.db = self.tmp / "runs" / "demo-repo" / "s1" / ".runtime" / S.DB_NAME
+        self.store = S.open_store(self.db)
+        self.adapter, restore = fake.use()
+        self.addCleanup(restore)
+        self.env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "HOME": str(self.tmp), "CLAUDE_CODE_ENTRYPOINT": "cli",
+                    "FAKE_API_TOKEN": SECRET}
+        # The engine-shaped classification: reason/warnings quoting the
+        # token, exactly what nous.classify builds from halt.json's message.
+        self.adapter.classify = lambda invocation, record, ctx: NativeState(
+            "failed", "halt", partial=True,
+            reason=f"engine log: bearer {SECRET}",
+            warnings=[f"engine echoed {SECRET} in a warning"],
+            evidence=[{"kind": "fake-halt", "location": f"/tmp/{SECRET}/halt.json"}])
+
+    def _cleanup(self):
+        P.make_writable(P.prepared_root(self.store))
+        self.store.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _running_invocation(self):
+        """Submit→prepare→approve→reserve→running, engine and supervisor
+        both gone: the state reconcile classifies from. No process spawned."""
+        m = request("req-1", work_id="w-1")
+        m["target"]["commit"] = self.commit
+        self.assertTrue(self.store.submit(m, env=self.env).ok)
+        res = P.prepare(self.store, "w-1", target=self.repo, env=self.env)
+        AP.approve(self.store, res.prep_id, code=res.short_code, source="chat",
+                   quote=go(res.short_code), env=self.env)
+        self.store.reserve_invocation("inv-1", res.prep_id,
+                                      expected_digest=res.material_digest,
+                                      launcher=(999998, "1"),
+                                      launch={"argv": ["fake-engine", "run"],
+                                              "cwd": str(self.tmp), "env_pass": [],
+                                              "env_set": {},
+                                              "logs": {"engine": str(self.tmp / "e.log")}})
+        self.store.transition("inv-1", ("reserved",), SV.SPAWNING,
+                              supervisor_pid=999999, supervisor_start="1")
+        self.store.transition("inv-1", ("spawning",), SV.RUNNING,
+                              engine_pid=999999, engine_start="1")
+        return "inv-1"
+
+    def _state_failed_event(self):
+        row = self.store.conn.execute(
+            "SELECT detail_json FROM events WHERE entity_id='inv-1'"
+            " AND event='state:failed'").fetchone()
+        return row[0] if row else ""
+
+    def _native_json(self):
+        row = self.store.conn.execute(
+            "SELECT native_json FROM invocations WHERE inv_id='inv-1'").fetchone()
+        return row[0] or ""
+
+    def test_secret_in_env_no_longer_wedges_and_nothing_persists(self):
+        # SIDE A (wedge): the secret IS in the caller's env. Before the fix
+        # reconcile raised StoreError, the invocation stayed `running`
+        # forever, and mark_not_launched was unreachable from that state.
+        inv_id = self._running_invocation()
+        out = R.reconcile(self.store, inv_id, env=self.env)   # no StoreError
+        self.assertEqual(out["state"], "failed")              # terminal, not stuck
+        self.assertNotIn(SECRET, self._state_failed_event())  # redacted, kept
+        self.assertNotIn(SECRET, self._native_json())
+        self.assertIn("redacted: possible credential in engine artifact",
+                      self._native_json())
+        # The events table keeps a truthful, secret-free record of WHY.
+        self.assertIn("state:failed",
+                      [e["event"] for e in self.store.list_events(entity_id=inv_id)])
+
+    def test_export_after_redaction_carries_no_token(self):
+        # SIDE A continued: the exported invocation file is token-free.
+        inv_id = self._running_invocation()
+        R.reconcile(self.store, inv_id, env=self.env)
+        study = self.tmp / "study"
+        export_study(self.store, study, env=self.env)   # would refuse pre-fix
+        exported = (study / "runtime" / "invocations" / "inv-1.json").read_text()
+        self.assertNotIn(SECRET, exported)
+        self.assertIn("redacted: possible credential in engine artifact", exported)
+
+    def test_cancel_on_the_wedged_shape_completes(self):
+        # SIDE D: cancel reconciles first; pre-fix it died on the same
+        # StoreError and left the run `running`.
+        inv_id = self._running_invocation()
+        self.store.request_cancel(inv_id, {"reason": "owner wants out"},
+                                  env={**self.env, "FAKE_API_TOKEN": SECRET})
+        out = R.cancel(self.store, inv_id, reason="owner wants out", env=self.env)
+        self.assertEqual(out["state"], "failed")
+        self.assertFalse(out["cancel"]["requested"])  # engine already gone
+        for e in self.store.list_events(entity_id=inv_id):
+            self.assertNotIn(SECRET, json.dumps(e))
+            self.assertNotIn(SECRET, e["detail_json"])
+
+    def test_secret_only_in_engine_text_not_env_still_classifies(self):
+        # The token in the native text but NOT in the reconcile caller's env
+        # (rotation, cron): the guard has nothing to match — the known
+        # residual, tracked as the follow-up denylist question in the issue.
+        # This pins that the redaction path never corrupts the record:
+        # classification proceeds and the state is terminal.
+        inv_id = self._running_invocation()
+        clean = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                 "HOME": str(self.tmp), "CLAUDE_CODE_ENTRYPOINT": "cli"}
+        out = R.reconcile(self.store, inv_id, env=clean)
+        self.assertEqual(out["state"], "failed")
+
+    def test_clean_classification_is_untouched_by_the_redactor(self):
+        # Negative control: a secret-free native state records verbatim —
+        # no marker, no warning, nothing dropped.
+        self.adapter.classify = lambda invocation, record, ctx: NativeState(
+            "failed", "halt", reason="halt: repeated identical failures")
+        inv_id = self._running_invocation()
+        out = R.reconcile(self.store, inv_id, env=self.env)
+        self.assertEqual(out["state"], "failed")
+        self.assertNotIn("redacted", self._native_json())
+
+    def test_operator_typed_refusals_still_fail_closed(self):
+        # Negative control (EventGuards parity): the operator-typed paths the
+        # fix must NOT relax. A secret in a cancel reason is REFUSED, not
+        # redacted — recovery.cancel reaches store.request_cancel, whose
+        # env-keyed guard rolls the whole request back.
+        inv_id = self._running_invocation()
+        with mock.patch.object(R, "reconcile", side_effect=lambda *a, **k: {
+                "terminal": False, "state": "running", "lifecycle": "running",
+                "cancel_requested_at": None}):
+            with self.assertRaisesRegex(S.StoreError, "FAKE_API_TOKEN"):
+                R.cancel(self.store, inv_id, reason=f"stop {SECRET}", env=ENV)
+        self.assertIsNone(self.store.get_invocation(inv_id)["cancel_requested_at"])
 
 
 if __name__ == "__main__":

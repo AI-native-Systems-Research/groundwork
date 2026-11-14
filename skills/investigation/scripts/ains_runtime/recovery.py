@@ -152,6 +152,55 @@ def _classify(store: Store, inv: dict, env: Mapping[str, str]) -> dict:
     return d
 
 
+REDACTED_MARKER = "redacted: possible credential in engine artifact"
+
+
+def _redact_native(native: dict, env: Mapping[str, str]) -> dict:
+    """Redact, never refuse, a secret value inside an adapter's native state.
+
+    Unlike operator-typed detail (cancel reason, mark-not-launched quote),
+    which the runtime REFUSES when it carries a secret, the classification
+    is ENGINE-AUTHORED text the operator cannot edit: the engine is spawned
+    with the secret values (supervisor.engine_env passes env_pass through,
+    and env_pass_names includes the request's secret_vars), so its halt
+    messages can quote them. Refusing here (the store's env-keyed guard)
+    wedges the invocation in `running` when the secret is in the caller's
+    env and persists the token verbatim into the append-only events table
+    when it is not — redaction keeps a truthful, secret-free record either
+    way and the transition proceeds. The precedent is cancel's redaction of
+    adapter results below; the operator-typed refusals stay as they are.
+    """
+    found = find_secret_values(native, env)
+    if not found:
+        return native
+
+    def scrub(obj):
+        if isinstance(obj, str):
+            return REDACTED_MARKER if find_secret_values(obj, env) else obj
+        if isinstance(obj, dict):
+            return {scrub(k): scrub(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [scrub(v) for v in obj]
+        return obj
+
+    # `state` is the runtime-validated lifecycle literal, never engine free
+    # text; scrubbing it (a secret value that happens to equal "failed" etc.,
+    # or the fallback below) would corrupt the state machine.
+    out = scrub(native)
+    out["state"] = native["state"]
+    if find_secret_values(out, env):
+        # A shape scrub() cannot make secret-free (e.g. a non-string dict key
+        # whose str() quotes a value): drop the native detail entirely rather
+        # than let the store's guard wedge the transition.
+        out = {"state": native["state"], "native_stop_reason": None,
+               "reason": REDACTED_MARKER, "partial": native.get("partial", False),
+               "evidence": [], "warnings": []}
+    out.setdefault("warnings", []).append(
+        f"classification redacted: {len(found)} string(s) matched a secret value "
+        "from the caller's environment (engine-authored native text)")
+    return out
+
+
 def reconcile(store: Store, inv_id: str, *, env: Mapping[str, str] | None = None) -> dict:
     """Reconcile one invocation (module docstring). Returns status()'s view."""
     env = dict(os.environ if env is None else env)
@@ -192,6 +241,11 @@ def reconcile(store: Store, inv_id: str, *, env: Mapping[str, str] | None = None
         native = _classify(store, inv, env)
     except Exception as e:
         return view(store, inv_id, env=env, notes=[f"classification pending: {e}"])
+    # Engine-authored text can quote a secret value (the engine is spawned with
+    # them): redact it here, before the transition, so the store's guard never
+    # refuses the classification (which would wedge the invocation in `running`)
+    # and the token is never persisted (see _redact_native).
+    native = _redact_native(native, env)
     if inv.get("cancel_requested_at"):
         groups = _last_cancel_groups(store, inv_id)
         try:
