@@ -79,6 +79,11 @@ VALIDATOR = SCRIPTS / "validate_answer.py"
 VALIDATOR_NAME = "validate_answer.py"
 VALIDATOR_TIMEOUT_S = 300
 COORDINATOR_OUTCOMES = ("supported", "not_supported", "inconclusive", "other")
+# The Spotlights native outcomes come from the fact the adapter reads
+# (spotlights.json outcomes) — the same value adapters/spotlights_static.py
+# emits, so a lock bump renaming one changes both sides together.
+from .adapters.spotlights_static import (  # noqa: E402  (fact-sourced outcomes)
+    CANDIDATES_FOUND as SPOT_CANDIDATES_FOUND, NO_OPPORTUNITY as SPOT_NO_OPPORTUNITY)
 # Stored states a result can be built for (terminal, or stuck for the owner).
 RESULTABLE = ("completed", "failed", "cancelled", "rejected", "not_launched",
               "recovery_required")
@@ -212,14 +217,14 @@ def spotlights_static(collected: dict, record: dict) -> Normalized:
                "models": sem.get("models"), "hints": sem.get("hints"),
                "module_status": collected.get("module_status"), "n_candidates": n,
                "output_folder": (record.get("non_material") or {}).get("output_folder")}
-    if outcome == "candidates_found":
-        expl = (f"candidates_found: {n} candidate(s). Candidates are model estimates "
-                "of where to look, not measurements")
+    if outcome == SPOT_CANDIDATES_FOUND:
+        expl = (f"{SPOT_CANDIDATES_FOUND}: {n} candidate(s). Candidates are model "
+                "estimates of where to look, not measurements")
         if collected.get("partial"):
             expl += f" ({collected.get('reason')})"
-    elif outcome == "no_opportunity":
-        expl = ("no_opportunity: the run completed and found no candidate in the "
-                "included modules")
+    elif outcome == SPOT_NO_OPPORTUNITY:
+        expl = (f"{SPOT_NO_OPPORTUNITY}: the run completed and found no candidate "
+                "in the included modules")
     else:
         expl = f"{outcome}: {collected.get('reason') or 'no reason recorded'}"
     st = col.get("state") if col.get("state") in COLLECTION_STATES else "failed"
@@ -229,7 +234,7 @@ def spotlights_static(collected: dict, record: dict) -> Normalized:
             or "not collected"
     norm = Normalized(
         st, reason, explanation=expl, partial=bool(collected.get("partial")),
-        outcome="other" if outcome in ("candidates_found", "no_opportunity")
+        outcome="other" if outcome in (SPOT_CANDIDATES_FOUND, SPOT_NO_OPPORTUNITY)
         else "unavailable",
         limitations=list(collected.get("limitations") or []), methods=methods,
         spend=_spend(collected.get("spend")), notes=list(collected.get("notes") or []))

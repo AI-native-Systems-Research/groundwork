@@ -107,7 +107,12 @@ FILE_VARS = tuple(U.fact("spotlights", "file_vars"))
 MATERIAL_VARS = tuple(U.fact("spotlights", "material_vars"))
 
 DRY_RUN_TIMEOUT_S = 120
+# The native outcomes (spotlights.json outcomes): the engine's own stop
+# reasons plus the runtime's failed/cancelled. classify() emits these and
+# results.spotlights_static() maps them, so both compare against the fact —
+# a lock bump renaming one must fail here, not degrade silently.
 OUTCOMES = tuple(U.fact("spotlights", "outcomes"))
+CANDIDATES_FOUND, NO_OPPORTUNITY = OUTCOMES[0], OUTCOMES[1]
 BAD_MODELS_EXIT = U.fact("spotlights", "bad_models_exit")
 _DRY_FIELDS = "|".join(re.escape(f) for f in U.fact("spotlights", "dry_run_fields"))
 
@@ -548,9 +553,9 @@ class SpotlightsStaticAdapter(Adapter):
             if degraded or mgr:
                 return fail("unclassified_native_state: zero candidates with DEGRADED "
                             "modules or manager issues is not a clean no_opportunity")
-            a.update(state="completed", outcome="no_opportunity")
+            a.update(state="completed", outcome=NO_OPPORTUNITY)
             return a
-        a.update(state="completed", outcome="candidates_found",
+        a.update(state="completed", outcome=CANDIDATES_FOUND,
                  partial=bool(degraded or mgr))
         if a["partial"]:
             a["reason"] = ("partial: " + ", ".join(
@@ -677,7 +682,7 @@ class SpotlightsStaticAdapter(Adapter):
         res["claims_draft"] = claims
         res["candidates_top"] = section.get("candidates_top", [])
         res["notes"] += list(section.get("notes") or [])
-        if a["outcome"] == "no_opportunity":
-            res["notes"].append("no_opportunity: the run completed and found no candidate "
-                                "in the included modules")
+        if a["outcome"] == NO_OPPORTUNITY:
+            res["notes"].append(f"{NO_OPPORTUNITY}: the run completed and found no "
+                                "candidate in the included modules")
         return res

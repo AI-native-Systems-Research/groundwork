@@ -158,5 +158,142 @@ class LockEnforced(unittest.TestCase):
         self.assertTrue(any("not the catalog commit" in p for p in out), out)
 
 
+class FactValuesAreNotRestated(unittest.TestCase):
+    """No shipped file restates an upstreams fact's value as a literal.
+
+    The structural gates above (LINE_CITE, no locked commits) are blind to
+    this drift shape: a restated enum or identifier cites nothing and pins
+    no version, so it passes both scans while a lock bump that changes the
+    fact leaves the restatement silently divergent. Three instances of the
+    class are recorded on issue #78 (contracts.py's task_type enum, the
+    spotlights outcomes spelled at six sites, gitstate.py's worktree_dir);
+    this scan generalizes the per-instance coupling tests those fixes
+    carried so a fourth instance fails the moment it lands.
+    """
+
+    SCAN = NoRestatedUpstreamFacts.SCAN
+    # A fact value counts as restatable when it is identifier-shaped and
+    # long enough that an accidental match is implausible.
+    VALUE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.@/-]{3,}$")
+    # Values the runtime owns independently of any upstream: they appear in
+    # the runtime's own state enums (supervisor.py, contracts.py,
+    # results.py) and in OTLP attribute names, so their presence in code is
+    # not a restatement of the fact that happens to share them. A fact whose
+    # values are all in here is skipped; a pair touching one is skipped.
+    RUNTIME_OWNED = frozenset({
+        "completed", "failed", "cancelled", "rejected", "not_launched",
+        "running", "spawning", "reserved", "exited", "recovery_required",
+        "accepted", "not_run", "collected", "unavailable", "passed",
+        "name", "description", "other", "supported", "inconclusive",
+    })
+    # Adapter policy and contract keyset declarations: MATERIAL_FIELDS
+    # names the request semantics keys the ADAPTER treats as material
+    # (base.py:62-66), and contracts.py's <validator>.keys((...)) calls
+    # declare the runtime's own message-contract keys. Both legitimately
+    # name keys some fact also lists (the campaign keys are the co-designed
+    # interface between runtime and upstream); neither is a restatement of
+    # the upstream's value. Masked out before scanning.
+    POLICY_DECL = re.compile(r"MATERIAL_FIELDS\s*=\s*\(.*?\)|"
+                             r"NON_MATERIAL_FIELDS\s*=\s*\{.*?\}|"
+                             r"\w+\.keys\(.*?\)\)",
+                             re.DOTALL)
+
+    def restatable_values(self):
+        """[(upstream, key, [values])] for every string or string-list fact."""
+        out = []
+        for path in sorted((SKILL / "references" / "upstreams").glob("*.json")):
+            if path.name == "lock.json":
+                continue
+            facts = json.loads(path.read_text())["facts"]
+            for key, entry in sorted(facts.items()):
+                value = entry.get("value") if isinstance(entry, dict) else entry
+                values = value if isinstance(value, list) else [value]
+                values = [v for v in values
+                          if isinstance(v, str) and self.VALUE_RE.match(v)
+                          and v not in self.RUNTIME_OWNED]
+                if len(values) >= 2:
+                    out.append((path.stem, key, values))
+        return out
+
+    def test_no_scanned_file_restates_two_fact_values(self):
+        # Two or more of one fact's values spelled adjacently in a literal
+        # is the restated-enum shape (a single value can be an ordinary
+        # word; the pair is the signature). references/upstreams/ itself is
+        # exempt — it is where the values live.
+        for upstream, key, values in self.restatable_values():
+            # both orderings: a restatement can spell the pair either way
+            pairs = [re.escape(a) + r'["\'][^)\n]{0,60}["\']' + re.escape(b)
+                     for a in values for b in values if a != b]
+            for path in self.SCAN:
+                text = self.POLICY_DECL.sub(" ", path.read_text())
+                for pat in pairs:
+                    with self.subTest(file=str(path.relative_to(ROOT)),
+                                      fact=f"{upstream}.{key}"):
+                        self.assertEqual(
+                            re.findall(pat, text), [],
+                            f"restates the {upstream}.{key} fact; read "
+                            f"upstreams.fact('{upstream}', '{key}') instead")
+
+    def test_every_fact_sourced_constant_is_used(self):
+        # A module-level `X = ...U.fact(...)` that nothing reads again is
+        # decorative fact-sourcing: the value is loaded but the code still
+        # spells literals (the dead-OUTCOMES shape recorded on issue #78).
+        # Uses are counted from the AST in Load context, never from name
+        # matches: a same-named constant in another module (the runtime's
+        # own OUTCOMES in contracts.py) is a different object and must not
+        # launder the dead one. Cross-module credit requires an explicit
+        # `from <defining module> import X` (as NAME or NAME as ALIAS) and
+        # then counts only the imported alias's loads.
+        import ast
+
+        def names_fact(node):
+            return (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "fact"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "U")
+
+        modules = sorted(p for p in (SKILL / "scripts").rglob("*.py")
+                         if "__pycache__" not in str(p))
+        trees = {p: ast.parse(p.read_text()) for p in modules}
+        # module name -> the constants it sources from facts
+        defined = {}
+        for p, tree in trees.items():
+            for node in tree.body:
+                if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Name)
+                        and any(names_fact(x) for x in ast.walk(node.value))):
+                    defined.setdefault(p.stem, {})[node.targets[0].id] = 0
+        self.assertTrue(defined, "no U.fact() constant found; the scan is inert")
+        # count genuine reads (Load context) in the defining module...
+        for p, tree in trees.items():
+            for name in defined.get(p.stem, {}):
+                defined[p.stem][name] = sum(
+                    isinstance(n, ast.Name) and n.id == name
+                    and isinstance(n.ctx, ast.Load) for n in ast.walk(tree))
+        # ...and explicit from-imports in other modules
+        for p, tree in trees.items():
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.ImportFrom) and node.module
+                        and node.module.split(".")[-1] in defined):
+                    continue
+                table = defined[node.module.split(".")[-1]]
+                for a in node.names:
+                    if a.name in table:
+                        alias = a.asname or a.name
+                        table[a.name] += sum(
+                            isinstance(n, ast.Name) and n.id == alias
+                            and isinstance(n.ctx, ast.Load)
+                            for n in ast.walk(tree))
+        for stem, table in defined.items():
+            for name, uses in table.items():
+                with self.subTest(constant=name, module=stem):
+                    self.assertGreater(
+                        uses, 0,
+                        f"{stem}.py: {name} is loaded from a fact but never "
+                        "used; either consume it or the code is restating "
+                        "the fact as literals")
+
+
 if __name__ == "__main__":
     unittest.main()
