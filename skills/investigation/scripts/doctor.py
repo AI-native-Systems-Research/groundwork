@@ -57,6 +57,28 @@ SPOTLIGHTS_TELEMETRY_REASON = (
     "won't fake either file. Usable only with an `import` capture that already "
     "contains traces.jsonl or 01_signals.json.")
 
+
+def _spotlights_telemetry_reason() -> str:
+    """SPOTLIGHTS_TELEMETRY_REASON, with the stage-01 filenames it names read
+    from references/upstreams/spotlights.json (the only home of upstream
+    facts) so a lock bump that renames them can't leave this prose drifting.
+    Falls back to the literal above when the facts file is unreadable —
+    doctor must still report with a broken lock (same resilience as
+    read_pins)."""
+    try:
+        import upstreams
+        f = upstreams.fact("spotlights", "stage01_inputs")
+        pre = f["signals_files"][0]
+        otel = f["otel_discriminator"]
+    except Exception:
+        return SPOTLIGHTS_TELEMETRY_REASON
+    return (
+        f"signal-pipeline can't read a metrics-only capture: its stage 01 needs "
+        f"{otel} (raw OTel) or a pre-cooked {pre}, and this skill captures "
+        f"metrics only. Anomaly detection is spotlights' job, so the skill "
+        f"won't fake either file. Usable only with an `import` capture that "
+        f"already contains {otel} or {pre}.")
+
 LS_REMOTE_TIMEOUT = 10
 
 # The package name is spelled in two parts on purpose: test_runtime_cli checks
@@ -487,7 +509,8 @@ def methods(tools: dict, engines: dict, blis: dict, repo_cfg: dict, cfgs: dict) 
         m["spotlights-telemetry"] = {"available": False, "reason": "signal-pipeline not found "
                                      "(not on PATH and no engines.signal-pipeline in the machine config)"}
     else:
-        m["spotlights-telemetry"] = {"available": False, "reason": SPOTLIGHTS_TELEMETRY_REASON}
+        m["spotlights-telemetry"] = {"available": False,
+                                     "reason": _spotlights_telemetry_reason()}
 
     reasons = []
     if not engines["nous"]["found"]:

@@ -158,5 +158,32 @@ class LockEnforced(unittest.TestCase):
         self.assertTrue(any("not the catalog commit" in p for p in out), out)
 
 
+class FactSourcedReason(unittest.TestCase):
+    """A reason string a shipped script builds from an upstreams fact,
+    coupled to the fact so a lock bump that changes the fact's value fails
+    loudly instead of leaving prose in code or docs drifting silently.
+
+    Named FactSourcedReason, not FactSourcedConstants: the parallel class in
+    this file that tests constants read from facts (the Nous task_types gate)
+    owns that name on another branch, and two same-named classes in one
+    module make Python bind only the later one — the other's tests silently
+    stop running while CI stays green. Distinct gate, distinct name."""
+
+    def test_doctor_reason_uses_the_spotlights_stage01_fact(self):
+        # doctor's spotlights-telemetry unavailability reason is built from
+        # the stage01_inputs fact; the fact must exist and hold the two
+        # shapes stage 01 accepts, or the reason's build (and its fallback
+        # equality) is grounded in nothing.
+        f = U.fact("spotlights", "stage01_inputs")
+        self.assertIn("signals_files", f)
+        self.assertIn("otel_discriminator", f)
+        self.assertTrue(f["signals_files"], "signals_files is empty")
+        # The F1 caveat in spotlights.md points at this fact by name rather
+        # than restating the filenames; the pointer must stay true.
+        text = (SKILL / "references" / "spotlights.md").read_text()
+        self.assertIn("stage01_inputs", text)
+        self.assertIn("upstreams/spotlights.json", text)
+
+
 if __name__ == "__main__":
     unittest.main()
