@@ -43,6 +43,10 @@
       "value": ["increase", "decrease"],
       "source": "v2/stop_rule.py:57"
     },
+    "task_types": {
+      "value": ["debug", "verify", "optimize", "policy", "explain", "other"],
+      "source": "v2/schemas/problem.schema.json:9 task_type enum (the same enum at v2/schemas/baseline.schema.json:9); one prompts/v2/checklists/<type>.md per value except other (v2/prompts.py:14-21)"
+    },
     "completed_stop_reasons": {
       "value": ["answered", "max_iterations", "stall"],
       "source": "v2/schemas/ledger_entry.schema.json:18-20 stop_reason enum (the others are null, halt, stop_sentinel)"

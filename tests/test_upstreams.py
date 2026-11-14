@@ -130,6 +130,36 @@ class NoRestatedUpstreamFacts(unittest.TestCase):
                 self.assertEqual(hits, [], "cite upstream source in the facts file instead")
 
 
+class FactSourcedConstants(NoRestatedUpstreamFacts):
+    """Code constants that restate an upstream enum must be read from the
+    facts file instead, so a lock bump that changes the enum fails loudly
+    here rather than drifting silently in code. The structural tests above
+    (LINE_CITE, no locked commits) cannot see this class of drift: an enum
+    restated as a bare tuple cites nothing and pins no version."""
+
+    def test_contracts_task_types_is_the_nous_fact(self):
+        # ains_runtime.contracts enforces body.task_type on every
+        # experiment-request via v.enum("task_type", TASK_TYPES); the enum
+        # is Nous v2's, so it must come from nous.json, not a restatement.
+        from ains_runtime import contracts
+        self.assertEqual(tuple(U.fact("nous", "task_types")),
+                         contracts.TASK_TYPES)
+
+    def test_nous_task_types_fact_is_not_restated_in_code(self):
+        # The restated-tuple shape this fact replaced: a literal spelling of
+        # the enum in any scanned file means someone bypassed the fact.
+        enum_re = re.compile(
+            r'["\'](?:debug|verify|optimize|policy|explain|other)["\']'
+            r'[^)\n]*["\'](?:debug|verify|optimize|policy|explain|other)["\']')
+        for path in self.SCAN:
+            hits = enum_re.findall(path.read_text())
+            with self.subTest(file=str(path.relative_to(ROOT))):
+                self.assertEqual(
+                    hits, [],
+                    "restate the Nous task_type enum in code; read "
+                    "upstreams.fact('nous', 'task_types') instead")
+
+
 class LockEnforced(unittest.TestCase):
     def setUp(self):
         from ains_runtime.adapters import nous as N
