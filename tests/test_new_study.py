@@ -12,6 +12,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _cov_child_env import covsite_env  # noqa: E402
+
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "skills/investigation/scripts" / "new_study.py"
 
@@ -51,7 +54,8 @@ class NewStudyBase(unittest.TestCase):
                     "INVESTIGATION_RUNS": str(self.tmp / "runs"),
                     "GIT_CONFIG_NOSYSTEM": "1", "LANG": "C.UTF-8",
                     **{k: v for k, v in os.environ.items()
-                     if k.startswith("COVERAGE_")}}
+                     if k.startswith("COVERAGE_")},
+                    **covsite_env()}
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
