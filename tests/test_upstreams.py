@@ -72,7 +72,7 @@ class GeneratedDocs(unittest.TestCase):
         text = (SKILL / "references" / "method-plan.md").read_text()
         self.assertIn(U.representability_table_md(), text,
                       "method-plan.md's representability table differs from blis.json; "
-                      "regenerate it: python3 scripts/verify_upstreams.py --write-docs")
+                      "regenerate it: python3 skills/investigation/scripts/verify_upstreams.py --write-docs")
 
 
 class NoRestatedUpstreamFacts(unittest.TestCase):
