@@ -1,6 +1,6 @@
 # Investigation skill v2 — implementation plan
 
-Status: **draft for owner review** (2026-11-05). Implements `docs/design-v2.md`.
+Status: Implemented. Phases P1–P7 shipped 2026-11-05 through 2026-11-10 (P7's repo publish is marked done in the effort table; P8 owner time remains). Implements `docs/design-v2.md`.
 
 This plan breaks the design into eight PR-sized phases. Each one leaves `main`
 green, meaning tests pass and the skill installs. It also lists the places
