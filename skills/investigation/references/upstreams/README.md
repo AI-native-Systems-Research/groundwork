@@ -6,7 +6,7 @@ doesn't restate any of it, and `tests/test_upstreams.py` enforces that.
 | File | Holds |
 |---|---|
 | `lock.json` | The exact versions used: the Nous, Spotlights, sim2real, vLLM and llm-d-router commits; the BLIS catalog commit; every BLIS binary by sha256, with its source commit, embedded router and patches |
-| `nous.json` | Nous facts: campaign keys, effort levels, stop reasons, native files, exit code, env var, worktree dir |
+| `nous.json` | Nous facts: campaign keys, task types, effort levels, stop reasons, native files, exit code, env var, worktree dir |
 | `spotlights.json` | Spotlights facts: file env vars, model id patterns, module-name rules, dry-run fields, exit codes |
 | `blis.json` | BLIS facts: which knobs are representable and which aren't (`method-plan.md`'s table is generated from this) |
 | `sim2real.json` | sim2real facts: the Python floor, declaration-only packaging, register spec form, subcommands |
