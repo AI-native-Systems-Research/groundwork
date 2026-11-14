@@ -48,7 +48,7 @@ from . import adapters as A
 from . import limits as L
 from . import procid
 from .canonical import canonical_json
-from .envpolicy import find_secret_values
+from .envpolicy import find_secret_values, secret_values
 from .store import Store, StoreError, now
 from .supervisor import (CANCELLED, COMPLETED, EXITED, FAILED, IN_FLIGHT, NOT_LAUNCHED,
                          RECOVERY_REQUIRED, REJECTED, RESERVED, RUNNING, SPAWNING,
@@ -171,12 +171,29 @@ def _redact_native(native: dict, env: Mapping[str, str]) -> dict:
     adapter results below; the operator-typed refusals stay as they are.
     """
     found = find_secret_values(native, env)
+    if not found and secret_values(env):
+        # The parsed-tree walk only examines strings (and str() of dict keys),
+        # while the store's guard checks the detail INCLUDING the canonical-
+        # serialized native_json, where a JSON number is text: an all-digit
+        # secret echoed by the engine into a number field (spotlights embeds
+        # whole result.json / run_manifest.json, so any engine-authored
+        # number flows here) is invisible to the walk but refused by the
+        # guard. Check the same serialized form so it triggers redaction.
+        found = find_secret_values(canonical_json(native), env)
     if not found:
         return native
 
     def scrub(obj):
+        if isinstance(obj, bool):
+            return obj  # bool is an int subclass; True is a fact, not "1"
         if isinstance(obj, str):
             return REDACTED_MARKER if find_secret_values(obj, env) else obj
+        if isinstance(obj, (int, float)):
+            # A JSON number is text in the serialization the guard checks:
+            # when its digits quote a secret value, replace it with the
+            # marker string so BOTH the tree walk and the serialized form
+            # come back clean (its str() is exactly its JSON spelling).
+            return REDACTED_MARKER if find_secret_values(str(obj), env) else obj
         if isinstance(obj, dict):
             return {scrub(k): scrub(v) for k, v in obj.items()}
         if isinstance(obj, list):
@@ -188,7 +205,7 @@ def _redact_native(native: dict, env: Mapping[str, str]) -> dict:
     # or the fallback below) would corrupt the state machine.
     out = scrub(native)
     out["state"] = native["state"]
-    if find_secret_values(out, env):
+    if find_secret_values(out, env) or find_secret_values(canonical_json(out), env):
         # A shape scrub() cannot make secret-free (e.g. a non-string dict key
         # whose str() quotes a value): drop the native detail entirely rather
         # than let the store's guard wedge the transition.
@@ -196,7 +213,7 @@ def _redact_native(native: dict, env: Mapping[str, str]) -> dict:
                "reason": REDACTED_MARKER, "partial": native.get("partial", False),
                "evidence": [], "warnings": []}
     out.setdefault("warnings", []).append(
-        f"classification redacted: {len(found)} string(s) matched a secret value "
+        f"classification redacted: {len(found)} finding(s) matched a secret value "
         "from the caller's environment (engine-authored native text)")
     return out
 

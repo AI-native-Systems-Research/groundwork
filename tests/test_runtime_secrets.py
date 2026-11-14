@@ -440,6 +440,111 @@ class EngineNativeRedaction(unittest.TestCase):
                 R.cancel(self.store, inv_id, reason=f"stop {SECRET}", env=ENV)
         self.assertIsNone(self.store.get_invocation(inv_id)["cancel_requested_at"])
 
+    # --- numeric-token carriers -------------------------------------------------
+    #
+    # _redact_native's parsed-tree check (find_secret_values) walks STRINGS
+    # only, while the store's guard checks the detail INCLUDING the
+    # canonical-serialized native_json, where a JSON number is text: an
+    # all-digit secret value (>= MIN_SECRET_LEN) echoed by the engine into a
+    # JSON number field passes _redact_native untouched and is still refused
+    # by the guard. The reachability is not low: spotlights_static.assess
+    # embeds the ENTIRE parsed result.json / run_manifest.json into the
+    # native dict (a["result"], a["manifest"] = result, manifest), so any
+    # engine-authored number anywhere in those files flows into native_json.
+    # Same two faces as the string case above.
+
+    NUMERIC_SECRET = "7331944227184"    # all digits, len 13 >= MIN_SECRET_LEN
+
+    def _numeric_classify(self):
+        # run_manifest.json-shaped evidence: a JSON number run_id quoting the
+        # token, alongside a JSON null (both survive a parsed-tree walk that
+        # only examines strings, and null must pass scrub's fall-through
+        # unchanged — engine artifacts are full of null fields).
+        self.adapter.classify = lambda invocation, record, ctx: NativeState(
+            "failed", "halt", partial=True,
+            reason="engine log: manifest truncated",
+            evidence=[{"kind": "manifest", "run_id": 7331944227184,
+                       "ended_at": None}])
+
+    def _numeric_env(self):
+        return {**self.env, "FAKE_NUMERIC_TOKEN": self.NUMERIC_SECRET}
+
+    def test_numeric_secret_no_longer_wedges_or_persists(self):
+        # SIDE A (wedge), numeric carrier: the secret IS in the caller's env.
+        # Before the fix reconcile raised StoreError on the transition (the
+        # token lived in $.native_json as digits), the invocation stayed
+        # `running`, and cancel died on the same refusal.
+        self._numeric_classify()
+        env = self._numeric_env()
+        inv_id = self._running_invocation()
+        out = R.reconcile(self.store, inv_id, env=env)       # no StoreError
+        self.assertEqual(out["state"], "failed")             # terminal, not stuck
+        self.assertNotIn(self.NUMERIC_SECRET, self._state_failed_event())
+        self.assertNotIn(self.NUMERIC_SECRET, self._native_json())
+        self.assertIn("redacted: possible credential in engine artifact",
+                      self._native_json())
+        self.assertIn("state:failed",
+                      [e["event"] for e in self.store.list_events(entity_id=inv_id)])
+
+    def test_numeric_secret_clean_env_still_classifies(self):
+        # SIDE B (leak face), numeric carrier: with the secret ABSENT from
+        # the reconcile caller's env the guard has nothing to match (the
+        # known residual, tracked as the denylist follow-up in the issue);
+        # this pins that the numeric scrub never corrupts the record.
+        self._numeric_classify()
+        inv_id = self._running_invocation()
+        clean = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                 "HOME": str(self.tmp), "CLAUDE_CODE_ENTRYPOINT": "cli"}
+        out = R.reconcile(self.store, inv_id, env=clean)
+        self.assertEqual(out["state"], "failed")             # classification proceeds
+
+    def test_numeric_secret_cancel_on_wedged_shape_completes(self):
+        # SIDE D, numeric carrier: cancel reconciles first; before the fix
+        # it died on the same StoreError and left the run `running`.
+        self._numeric_classify()
+        env = self._numeric_env()
+        inv_id = self._running_invocation()
+        self.store.request_cancel(inv_id, {"reason": "owner wants out"}, env=env)
+        out = R.cancel(self.store, inv_id, reason="owner wants out", env=env)
+        self.assertEqual(out["state"], "failed")
+        self.assertFalse(out["cancel"]["requested"])   # engine already gone
+        for e in self.store.list_events(entity_id=inv_id):
+            self.assertNotIn(self.NUMERIC_SECRET, json.dumps(e))
+            self.assertNotIn(self.NUMERIC_SECRET, e["detail_json"])
+
+    def test_clean_numbers_pass_through_untouched(self):
+        # Negative control, numeric carrier: clean engine-authored numbers
+        # (no secret match) record verbatim — no marker, no warning, nothing
+        # dropped, and the numbers stay numbers (never stringified).
+        env = self._numeric_env()                          # secret present, unmatched
+        self.adapter.classify = lambda invocation, record, ctx: NativeState(
+            "failed", "halt", partial=True, reason="engine log: manifest truncated",
+            evidence=[{"kind": "manifest", "run_id": 42, "pages": [3, 7]}])
+        inv_id = self._running_invocation()
+        out = R.reconcile(self.store, inv_id, env=env)
+        self.assertEqual(out["state"], "failed")
+        native = json.loads(self._native_json())
+        self.assertEqual(native["evidence"][0]["run_id"], 42)
+        self.assertEqual(native["evidence"][0]["pages"], [3, 7])
+        self.assertNotIn("redacted", self._native_json())
+
+    def test_bool_and_small_int_native_values_are_not_stringified(self):
+        # Negative control for the bool/int distinction the fix must keep:
+        # True is a fact, not the number 1 (bool is an int subclass), and a
+        # small int can never match (MIN_SECRET_LEN) — both stay typed, not
+        # marker-strings, and `partial` survives redaction of other fields.
+        env = self._numeric_env()
+        self.adapter.classify = lambda invocation, record, ctx: NativeState(
+            "failed", "halt", partial=True, reason=f"engine log: bearer {SECRET}",
+            evidence=[{"kind": "manifest", "ok": True, "count": 1}])
+        inv_id = self._running_invocation()
+        out = R.reconcile(self.store, inv_id, env=env)
+        self.assertEqual(out["state"], "failed")
+        native = json.loads(self._native_json())
+        self.assertIs(native["partial"], True)
+        self.assertIs(native["evidence"][0]["ok"], True)
+        self.assertEqual(native["evidence"][0]["count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
