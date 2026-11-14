@@ -29,7 +29,8 @@ job_unit() {
     "$PY" -m coverage combine || exit 1
     "$PY" -m coverage report
     # Per-file floor: a total-only gate stays green when one file drops to 0%
-    # (issues #2/#3/#8). Mirrors the CI unit job's extra step.
+    # (issues #2/#3/#8). ci-local.sh is currently the only gate for the
+    # floor; the CI unit job's step is pending issue #70.
     "$PY" "$REPO/scripts/check_coverage_floor.py"
   )
 }
