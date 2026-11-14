@@ -23,12 +23,25 @@ from _cov_child_env import covsite_env  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 COVSITE = HERE / "_covsite"
-# A child script inside .coveragerc's measured source dirs, so a traced
-# child records lines for it (the measurement contract being pinned).
+# The measured child. It is NOT under .coveragerc's source dirs, so a traced
+# child records no rows for it — the test asserts the data file's EXISTENCE,
+# which is the half that breaks on user-site coverage installs.
 CHILD = HERE / "fixtures" / "covsite" / "child.py"
 
 
 class CovsiteEnvKeys(unittest.TestCase):
+    def setUp(self):
+        # The tests below poke os.environ["PYTHONPATH"]; snapshot it so a
+        # test can never erase an ambient value for later modules in the
+        # same process (the hazard documented for cli_handlers).
+        self.saved_pythonpath = os.environ.get("PYTHONPATH")
+
+    def tearDown(self):
+        if self.saved_pythonpath is None:
+            os.environ.pop("PYTHONPATH", None)
+        else:
+            os.environ["PYTHONPATH"] = self.saved_pythonpath
+
     def test_no_coverage_running_means_no_keys(self):
         # Outside a coverage run the helper must add nothing: the child env
         # stays as scrubbed as the caller built it.
@@ -49,8 +62,16 @@ class CovsiteEnvKeys(unittest.TestCase):
         if not (os.environ.get("COVERAGE_PROCESS_START")
                 or os.environ.get("COVERAGE_PROCESS_CONFIG")):
             self.skipTest("suite not running under coverage")
+        # Without an ambient PYTHONPATH ours is the whole value...
+        os.environ.pop("PYTHONPATH", None)
+        self.assertEqual(covsite_env()["PYTHONPATH"].split(os.pathsep),
+                         [str(COVSITE)])
+        # ...and with one set (IDE runner, tox) it stays ahead of ours:
+        # assert what we appended, never that we were the only writer.
+        os.environ["PYTHONPATH"] = "/nonexistent/ambient"
+        self.assertEqual(covsite_env()["PYTHONPATH"].split(os.pathsep),
+                         ["/nonexistent/ambient", str(COVSITE)])
         keys = covsite_env()
-        self.assertEqual(keys.get("PYTHONPATH"), str(COVSITE))
         # COVERAGE_SITE must name a directory that actually contains
         # coverage, or the child-side fallback import cannot work.
         site_dir = keys.get("COVERAGE_SITE")
@@ -59,20 +80,12 @@ class CovsiteEnvKeys(unittest.TestCase):
                         f"no coverage package under {site_dir}")
 
     def test_pythonpath_appends_when_caller_already_set_one(self):
-        saved = os.environ.get("PYTHONPATH")
+        if not (os.environ.get("COVERAGE_PROCESS_START")
+                or os.environ.get("COVERAGE_PROCESS_CONFIG")):
+            self.skipTest("suite not running under coverage")
         os.environ["PYTHONPATH"] = "/nonexistent/caller/path"
-        try:
-            if not (os.environ.get("COVERAGE_PROCESS_START")
-                    or os.environ.get("COVERAGE_PROCESS_CONFIG")):
-                self.skipTest("suite not running under coverage")
-            keys = covsite_env()
-            self.assertEqual(keys["PYTHONPATH"].split(os.pathsep),
-                             ["/nonexistent/caller/path", str(COVSITE)])
-        finally:
-            if saved is None:
-                os.environ.pop("PYTHONPATH", None)
-            else:
-                os.environ["PYTHONPATH"] = saved
+        self.assertEqual(covsite_env()["PYTHONPATH"].split(os.pathsep),
+                         ["/nonexistent/caller/path", str(COVSITE)])
 
     def test_pythonpath_is_not_duplicated_on_repeated_calls(self):
         if not (os.environ.get("COVERAGE_PROCESS_START")
@@ -80,10 +93,9 @@ class CovsiteEnvKeys(unittest.TestCase):
             self.skipTest("suite not running under coverage")
         first = covsite_env()["PYTHONPATH"]
         os.environ["PYTHONPATH"] = first
-        try:
-            self.assertEqual(covsite_env()["PYTHONPATH"], first)
-        finally:
-            os.environ.pop("PYTHONPATH", None)
+        self.assertEqual(covsite_env()["PYTHONPATH"], first)
+        # tearDown restores the ambient value; erasing PYTHONPATH here
+        # would instead erase it for every later test in this process.
 
 
 class ChildMeasuredWithScrubbedHome(unittest.TestCase):
