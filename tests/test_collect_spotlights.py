@@ -44,6 +44,172 @@ def snapshot(root: Path) -> dict:
             for p in root.rglob("*") if p.is_file()}
 
 
+class EngineShapeDriftResidualTest(unittest.TestCase):
+    """The three residual engine-JSON shape-drift faces PR #113 deliberately
+    left open (its scope was the :360 span and :343 project_tree guards):
+    report.run as a list (:229 estimate hop and the :419 run section),
+    run_manifest.json whose top level is a JSON list (:324), and
+    report.context as a list (:424, found by the supervisor's probe).
+
+    Same blast radius as the class: the crash escapes main()'s
+    (CouldNotRun, CollectionError) except clause, exits 1, and writes NO
+    collection.json — the study keeps only the partial spotlights/ copies,
+    breaking the module docstring's degrade contract. Each test corrupts
+    one field of the fixture copy in the toyrepo harness, pins the
+    degrade contract (exit 0, no traceback, collection.json IS written,
+    the other candidates' claims intact), and pins what the corrupted
+    field contributes instead: absent (read as a report/run without that
+    block) or a note (a non-object manifest lands in the no-manifest
+    note path), never a crash. Red at main 8d40c69 with the exact
+    AttributeError each test names (verified by the mutation drill in
+    the PR body: reverting collect_spotlights.py to main).
+    """
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        root = Path(self._td.name)
+        self.target = root / "toyrepo"
+        (self.target / "toy/cache").mkdir(parents=True)
+        (self.target / "toy/cache/constants.py").write_text(CONSTANTS)
+        (self.target / "toy/cache/policy.py").write_text(POLICY)
+        git(root, "init", "-q", str(self.target))
+        git(self.target, "add", ".")
+        git(self.target, "commit", "-qm", "c1")
+        self.sha = git(self.target, "rev-parse", "HEAD")
+        (self.target / "toy/cache/constants.py").write_text("# moved\n" + CONSTANTS)
+        git(self.target, "commit", "-qam", "c2")
+        self.study = self.target / "investigations" / "s1"
+        self.study.mkdir(parents=True)
+        self.run_dir = root / "runs" / "spotlights-a"
+        shutil.copytree(RUN, self.run_dir)
+        mp = self.run_dir / "run_manifest.json"
+        m = json.loads(mp.read_text())
+        m["target"]["commit_sha"] = self.sha
+        mp.write_text(json.dumps(m, indent=2))
+
+    def corrupt_report(self, fn):
+        """Apply fn(report-dict) to the fixture copy's result.json."""
+        rp = self.run_dir / "result.json"
+        r = json.loads(rp.read_text())
+        fn(r["report"])
+        rp.write_text(json.dumps(r))
+
+    def run_collect(self, *extra):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "--study", str(self.study),
+             "--run-dir", str(self.run_dir), *extra],
+            capture_output=True, text=True)
+
+    def assert_collected(self, r):
+        """The collect half of the degrade contract: exit 0, no traceback,
+        collection.json IS written, and the run-a ranking's other claims
+        (0002/0001/0003) are intact — a corrupted run/context block must
+        not cost anyone's citation."""
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertTrue((self.study / "collection.json").is_file(),
+                        "collection.json must be written even when an "
+                        "engine-authored block is in a hostile shape")
+        sec = json.loads((self.study / "collection.json").read_text())["spotlights"]
+        self.assertEqual([c["candidate_id"] for c in sec["claims_draft"]],
+                         ["cand-toy_cache-0002", "cand-toy_cache-0001",
+                          "cand-toy_cache-0003"])
+        return sec
+
+    def test_report_run_list_degrades_to_a_run_without_fields(self):
+        """report.run=['deep_research'] crashed at main with
+        AttributeError: 'list' object has no attribute 'get' (estimate_values
+        :229, before a single citation was drafted), exit 1, no
+        collection.json. Now a non-mapping run reads as a run with no
+        cost_usd/run_id/pipeline; run_id still falls back to the manifest's,
+        and every candidate still cites."""
+        self.corrupt_report(lambda rep: rep.__setitem__("run", ["deep_research"]))
+        sec = self.assert_collected(self.run_collect())
+        self.assertIsNone(sec["pipeline"])          # absent, not a crash
+        self.assertEqual(sec["run_id"], "run-toy0001")  # manifest fallback
+        self.assertIsNone(cs.run_field({"run": ["x"]}, "cost_usd"))
+        self.assertEqual(cs.run_field({"run": {"cost_usd": 2}}, "cost_usd"), 2)
+        self.assertEqual(cs.run_field({}, "cost_usd"), None)
+
+    def test_report_run_list_reaches_the_run_section_too(self):
+        """The :419 run section is the same face one guard away: with the
+        estimate hop fixed, report.run as a list would crash there instead
+        (run.get('run_id')). This test corrupts run AND deletes the
+        manifest's run_id so the section has no fallback — absent run_id,
+        never a crash. (The estimate hop crashes first at main, so the
+        mutation drill's red-at-main for this test is the :229
+        AttributeError.)"""
+        self.corrupt_report(lambda rep: rep.__setitem__("run", ["deep_research"]))
+        mp = self.run_dir / "run_manifest.json"
+        m = json.loads(mp.read_text())
+        del m["run_id"]
+        mp.write_text(json.dumps(m, indent=2))
+        sec = self.assert_collected(self.run_collect())
+        self.assertIsNone(sec["run_id"])
+        self.assertIsNone(sec["pipeline"])
+
+    def test_run_manifest_top_level_list_degrades_to_the_no_manifest_path(self):
+        """run_manifest.json = ['not','a','manifest'] crashed at main with
+        AttributeError: 'list' object has no attribute 'get' (:324 target =
+        (manifest or {}).get('target')), exit 1, no collection.json. Now a
+        non-object manifest lands in the no-manifest note path — the shape
+        the :235-236 cost hop already uses — is NOT copied (only a dict
+        passes the copy tier), and with --sha the citations still draft."""
+        (self.run_dir / "run_manifest.json").write_text('["not", "a", "manifest"]')
+        r = self.run_collect("--sha", self.sha)
+        sec = self.assert_collected(r)
+        self.assertTrue(any("is not a JSON object" in n for n in sec["notes"]),
+                        sec["notes"])
+        self.assertFalse(any("no readable run_manifest" in n for n in sec["notes"]),
+                         sec["notes"])
+        self.assertNotIn("spotlights/run_manifest.json",
+                         sorted(sec["copies"]))    # never copied
+        # without --sha there is no commit to cite at — a note, not a crash
+        r2 = self.run_collect()
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        sec2 = json.loads((self.study / "collection.json").read_text())["spotlights"]
+        self.assertEqual(sec2["claims_draft"], [])
+        self.assertTrue(any("no target commit sha" in n for n in sec2["notes"]),
+                        sec2["notes"])
+
+    def test_run_manifest_non_object_int_is_the_same_tier(self):
+        """A manifest that parses to a JSON scalar (42) is the same face —
+        it crashed at main with AttributeError: 'int' object has no
+        attribute 'get' (:324) — so the guard must not be list-specific."""
+        (self.run_dir / "run_manifest.json").write_text("42")
+        r = self.run_collect("--sha", self.sha)
+        sec = self.assert_collected(r)
+        self.assertTrue(any("is not a JSON object" in n for n in sec["notes"]),
+                        sec["notes"])
+
+    def test_report_context_list_degrades_to_no_objective(self):
+        """report.context=['objective'] (the supervisor's probe, not in the
+        reviewer's comment) crashed at main with AttributeError: 'list'
+        object has no attribute 'get' (:424 — AFTER the citations were
+        drafted and written, so the run's work was lost at the last hop).
+        Now a non-mapping context reads as a report with no objective."""
+        self.corrupt_report(lambda rep: rep.__setitem__("context", ["objective"]))
+        sec = self.assert_collected(self.run_collect())
+        self.assertIsNone(sec["objective"])        # absent, not a crash
+
+    def test_report_context_string_is_the_same_face(self):
+        """A string context is the same face one spelling over; the guard
+        is the isinstance shape, not a list check."""
+        self.corrupt_report(lambda rep: rep.__setitem__("context", "objective"))
+        sec = self.assert_collected(self.run_collect())
+        self.assertIsNone(sec["objective"])
+
+    def test_intact_run_and_context_still_populate_the_section(self):
+        """No over-blocking: an ordinary run/context block populates
+        run_id/pipeline/objective exactly as the uncorrupted fixture does,
+        so the guards tolerate every well-formed spelling."""
+        sec = self.assert_collected(self.run_collect())
+        self.assertEqual(sec["run_id"], "run-toy0001")
+        self.assertEqual(sec["pipeline"], "deep_research")
+        self.assertEqual(sec["objective"], "reduce median TTFT")
+
+
 class SpotlightsCollectTest(unittest.TestCase):
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
