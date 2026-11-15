@@ -228,7 +228,12 @@ def estimate_values(report: dict, sorted_json, manifest) -> set:
             continue
         add(c.get("estimated_impact"))
         add(c.get("estimated_impact_explanation"))
-        for p in c.get("proposals") or []:
+        # proposals is engine-authored report JSON (same class as the
+        # candidates hop above): `or []` only catches None/absent, so a
+        # truthy non-list (an int) would raise TypeError. A non-list reads
+        # as no proposals — the guard only ever forbids, so absence is safe.
+        props = c.get("proposals")
+        for p in props if isinstance(props, list) else []:
             if isinstance(p, dict):
                 add(p.get("expected_effect"))
     run = report.get("run")
@@ -276,10 +281,16 @@ def source_lines(repo: Path, sha: str, path: str):
 
 
 def first_span(cand: dict):
-    for loc in cand.get("locations") or []:
+    # locations/spans are engine-authored report JSON nothing validates
+    # between the file read and here: `or []` only catches None/absent, so a
+    # truthy non-list (an int) would raise TypeError. A non-list reads as no
+    # locations/spans — the existing (None, None) path, never a crash.
+    locs = cand.get("locations")
+    for loc in locs if isinstance(locs, list) else []:
         if not isinstance(loc, dict) or not loc.get("file"):
             continue
-        for sp in loc.get("spans") or []:
+        sps = loc.get("spans")
+        for sp in sps if isinstance(sps, list) else []:
             if isinstance(sp, dict) and "line_start" in sp and "line_end" in sp:
                 return loc["file"], sp
     return None, None
@@ -431,9 +442,13 @@ def collect(study: Path, run_dir: Path, top: int, repo: Path, sha_override) -> d
             "file": path, "span": span, "cited": cid in cited,
             "spotlights_estimate_not_a_claim": {
                 "estimated_impact": c.get("estimated_impact")},
+            # proposals is engine-authored report JSON (same class as the
+            # hops above): a non-list reads as no proposals — the summary
+            # keeps the candidate, minus its hypothesis list.
             "proposals_are_hypotheses": [
                 {"id": p.get("id"), "title": p.get("title"), "source": p.get("source")}
-                for p in c.get("proposals") or [] if isinstance(p, dict)],
+                for p in (c.get("proposals") if isinstance(c.get("proposals"), list)
+                          else []) if isinstance(p, dict)],
         })
 
     # run/context are engine-authored report blocks (same class as the hops

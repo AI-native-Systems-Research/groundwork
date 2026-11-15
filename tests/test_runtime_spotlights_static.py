@@ -472,6 +472,66 @@ class Classify(Base):
         self.assertEqual(ns.state, "failed")
         self.assertIn("run_manifest.json missing or unreadable", ns.reason)
 
+    def rewrite_manifest(self, fn):
+        """place() the fixture, then rewrite one field of its manifest.
+
+        The dict manifest passes assess's top-level isinstance gate, so a
+        drifted value INSIDE it (a list where a mapping is expected) flows
+        to every later hop — the residual shape-drift class the outer
+        non-object guards do not reach (supervisor directive cycle 98,
+        reviewer af4a512c-171)."""
+        out = self.place(self.rec, "candidates-found")
+        mp = out / "run_manifest.json"
+        m = json.loads(mp.read_text())
+        fn(m)
+        mp.write_text(json.dumps(m))
+        return out
+
+    def test_manifest_target_list_degrades_instead_of_a_stuck_pending(self):
+        """A DICT manifest carrying target=['x'] passes assess's isinstance
+        gate, so the truthy list reached classify's target.commit_sha hop
+        and crashed at main with AttributeError: 'list' object has no
+        attribute 'get' — through recovery.py's reconcile try/except, i.e.
+        a classification-LOSS face: every reconcile of the exited
+        invocation surfaces as a stuck "classification pending" note, never
+        a state. With the isinstance guard a drifted target reads as no
+        target: no mismatch warning, the classification itself unchanged
+        (recovery gets its state on every reconcile)."""
+        self.rewrite_manifest(lambda m: m.__setitem__("target", ["x"]))
+        ns = self.classify()
+        self.assertEqual(ns.state, "completed")
+        self.assertEqual(ns.native_stop_reason, "candidates_found")
+        self.assertFalse(any("not the prepared commit" in w for w in ns.warnings))
+        # the intact spelling still warns (control: no over-blocking)
+        self.place_mismatch(Path(self.rec["non_material"]["output_folder"]))
+        ns = self.classify()
+        self.assertEqual(ns.state, "completed")
+        self.assertTrue(any("not the prepared commit" in w for w in ns.warnings))
+
+    def place_mismatch(self, out):
+        """Rewrite the placed fixture's manifest with a mismatched sha."""
+        out and shutil.rmtree(out, ignore_errors=True)  # place() cannot re-copy
+        shutil.copytree(FIX / "candidates-found", out)
+        mp = out / "run_manifest.json"
+        m = json.loads(mp.read_text())
+        m["target"]["commit_sha"] = "f" * 40
+        mp.write_text(json.dumps(m))
+
+    def test_manifest_outputs_list_degrades_to_the_counted_fallback(self):
+        """A DICT manifest carrying outputs=['x'] crashed assess at main
+        with AttributeError: 'list' object has no attribute 'get' (the
+        outputs.num_candidates hop) — assess is the entry point of both
+        classify and collect, so the face is shared. With the isinstance
+        guard a drifted outputs reads as no outputs: the documented
+        counted-candidates fallback warning fires, classification
+        unchanged."""
+        self.rewrite_manifest(lambda m: m.__setitem__("outputs", ["x"]))
+        ns = self.classify()
+        self.assertEqual(ns.state, "completed")
+        self.assertEqual(ns.native_stop_reason, "candidates_found")
+        self.assertTrue(any("outputs.num_candidates missing; counted"
+                            in w for w in ns.warnings))
+
 
 # --- collect ----------------------------------------------------------------------
 
@@ -583,6 +643,38 @@ class Collect(Base):
         self.assertEqual(r["spend"]["completeness"], "unknown")
         self.assertIsNone(r["versions"]["manifest_spotlights_commit"])
         self.assertEqual(r["claims_draft"], [])
+
+    def test_manifest_spotlights_list_degrades_to_no_commit(self):
+        """A DICT manifest carrying spotlights=['x'] passes assess's
+        top-level isinstance gate, so the truthy list reached collect's
+        versions hop (the manifest_spotlights_commit read) and crashed at
+        main with AttributeError: 'list' object has no attribute 'get' —
+        through results.py's adapter.collect wrapper, i.e. a
+        collection-LOSS face: the run's native output is kept but never
+        collected. With the isinstance guard (_spotlights_sha) a drifted
+        spotlights block reads as no commit: the collection completes and
+        versions.manifest_spotlights_commit is None, never a crash."""
+        out = self.place(self.rec, "candidates-found")
+        mp = out / "run_manifest.json"
+        m = json.loads(mp.read_text())
+        m["spotlights"] = ["x"]
+        mp.write_text(json.dumps(m))
+        r = self.collect(None)
+        self.assertEqual(r["outcome"], "candidates_found")
+        self.assertEqual(r["collection"]["state"], "collected")
+        self.assertIsNone(r["versions"]["manifest_spotlights_commit"])
+        # the intact spelling still populates it (control: no over-blocking)
+        out = Path(self.rec["non_material"]["output_folder"])
+        shutil.rmtree(out, ignore_errors=True)  # place() cannot re-copy
+        shutil.copytree(FIX / "candidates-found", out)
+        mp = out / "run_manifest.json"
+        m = json.loads(mp.read_text())
+        m["spotlights"] = {"commit_sha": "abc290f8dec", "pipeline": "deep-research"}
+        mp.write_text(json.dumps(m))
+        r = self.collect(None)
+        self.assertEqual(r["outcome"], "candidates_found")
+        self.assertEqual(r["collection"]["state"], "collected")
+        self.assertEqual(r["versions"]["manifest_spotlights_commit"], "abc290f8dec")
 
 
 # --- cancel (§4.4) and an end-to-end launch with a fake engine -----------------------
