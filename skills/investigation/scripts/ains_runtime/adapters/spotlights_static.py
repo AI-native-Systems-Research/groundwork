@@ -193,6 +193,19 @@ class SpotlightsStaticAdapter(Adapter):
         nm = record.get("non_material", {})
         return Path(nm["output_folder"]), Path(nm["artifacts_dir"])
 
+    @staticmethod
+    def _manifest_dict(a: dict) -> dict:
+        """assess()'s manifest as a dict, or {} when it is anything else.
+
+        assess() stores the raw _load() value in a["manifest"] before its
+        isinstance fail-gate returns, so a failed assessment (manifest not a
+        JSON object) carries a list/string/int there. Every later hop that
+        reads manifest fields must go through this, not `a["manifest"] or
+        {}` — that spelling only catches None.
+        """
+        m = a.get("manifest")
+        return m if isinstance(m, dict) else {}
+
     # --- versions ---------------------------------------------------------------
 
     def _probe(self, ctx) -> dict:
@@ -561,8 +574,12 @@ class SpotlightsStaticAdapter(Adapter):
     def classify(self, invocation: dict, record: dict, ctx: AdapterContext) -> NativeState:
         a = self.assess(invocation, record)
         commit = (record.get("material") or {}).get("target", {}).get("commit")
-        got = ((a["manifest"] or {}).get("target") or {}).get("commit_sha")
-        if a["manifest"] and commit and got and got != commit:
+        # a["manifest"] can be a non-dict on a failed assessment (see
+        # _manifest_dict): classify must degrade, not crash — recovery calls
+        # it on every reconcile of an exited invocation.
+        man = self._manifest_dict(a)
+        got = (man.get("target") or {}).get("commit_sha")
+        if man and commit and got and got != commit:
             a["warnings"].append(f"run_manifest target.commit_sha {got} is not the "
                                  f"prepared commit {commit}")
         stop = a["outcome"] if a["state"] in ("completed", "cancelled") else None
@@ -639,11 +656,11 @@ class SpotlightsStaticAdapter(Adapter):
             "n_candidates": a["n_candidates"], "module_status": a["module_status"],
             "issues": a["issues"], "evidence": a["evidence"],
             "limitations": self.limitations(a) if a["result"] else [],
-            "spend": self.spend(a["manifest"]),
+            "spend": self.spend(self._manifest_dict(a)),
             "versions": {"engine_sha": (record.get("material") or {}).get(
                 "versions", {}).get("engine_sha"),
-                "manifest_spotlights_commit": ((a["manifest"] or {}).get("spotlights")
-                                               or {}).get("commit_sha")},
+                "manifest_spotlights_commit": (self._manifest_dict(a)
+                                               .get("spotlights") or {}).get("commit_sha")},
             "collection": {"state": "not_run", "path": None, "error": None},
             "claims_draft": [], "estimate_guard": {"checked": 0, "violations": []},
             "notes": [],
@@ -663,7 +680,7 @@ class SpotlightsStaticAdapter(Adapter):
         report = CS.report_of(a["result"])
         sorted_js = CS.find_sorted(Path(a["output_folder"]), "sorted_candidates.json")
         forbidden = CS.estimate_values(report, _load(sorted_js) if sorted_js else None,
-                                       a["manifest"])
+                                       self._manifest_dict(a))
         claims = section.get("claims_draft") or []
         bad = [c["id"] for c in claims if str(c.get("value")) in forbidden]
         res["estimate_guard"] = {"checked": len(claims), "violations": bad}
