@@ -576,5 +576,65 @@ class ManifestAndCandidatesShapeDriftTest(unittest.TestCase):
         self.assertEqual(len(sec["claims_draft"]), 3)
 
 
+class SortedCandidatesShapeDriftTest(ManifestAndCandidatesShapeDriftTest):
+    """The sorted_candidates.json candidates shape-drift face (scanner
+    8d94eec3-f44, supervisor directive cycle 93) — the residual of the
+    engine-authored-JSON family the #113/#115/#116 triangle left open.
+
+    sorted_candidates.json is engine-authored JSON nothing validates between
+    the file read and estimate_values' loop over it. A non-list candidates
+    (an int) raised TypeError: 'int' object is not iterable at
+    estimate_values (:231 at main 8d40c69) — and TypeError is neither
+    CouldNotRun nor CollectionError, so it escapes main()'s clause (exit 1,
+    traceback, no collection.json) AND escapes the runtime adapter's
+    containment: adapters/spotlights_static.py calls CS.estimate_values at
+    :682, after collect_run's try/except has already returned. The same
+    call is reachable from results.py:203 (spotlights_estimates).
+
+    ranked_ids (:114) already isinstance-guards its own read of the same
+    key; the fix applies the same idiom to the estimate loop, so a drifted
+    shape lands in the no-candidates tier (the sort scores contribute no
+    forbidden estimate — the guard only ever forbids, so absence is safe)
+    and every candidate still cites. Both tests were red at main 8d40c69
+    and at PR #116 head 4e17bf3 with the exact TypeError (verified by
+    execution before the fix landed).
+    """
+
+    def rewrite_sorted(self, fn):
+        sp = self.run_dir / "sorted" / "sorted_candidates.json"
+        s = json.loads(sp.read_text())
+        fn(s)
+        sp.write_text(json.dumps(s))
+
+    # --- sorted_candidates.json candidates ----------------------------------
+
+    def test_sorted_candidates_int_degrades_to_no_forbidden_estimate(self):
+        """sorted candidates=7 crashed at main with TypeError: 'int' object
+        is not iterable (estimate_values :231), exit 1, traceback, no
+        collection.json. With the guard a non-list candidates reads as a
+        sort with no scores: the claims still draft and cite normally — the
+        estimate guard simply has fewer forbidden values to avoid."""
+        self.rewrite_sorted(lambda s: s.__setitem__("candidates", 7))
+        sec = self.assert_collected(self.run_collect())
+        # the unit face, same spelling the adapter's :682 call and
+        # results.py:203 (spotlights_estimates) would hit
+        self.assertEqual(cs.estimate_values({"candidates": []},
+                                            {"candidates": 7}, {}), set())
+        # a well-formed sort still contributes its scores afterwards
+        self.assertIn("91", cs.estimate_values(
+            {"candidates": []}, {"candidates": [{"score": 91}]}, {}))
+
+    def test_sorted_candidates_string_is_the_same_face(self):
+        """candidates='x' iterates per-character at main (each char fails
+        the isinstance-dict check, so it silently contributes nothing —
+        not a crash, but the loop shape is wrong); with the guard a string
+        also reads as no candidates."""
+        self.rewrite_sorted(lambda s: s.__setitem__("candidates", "x"))
+        sec = self.assert_collected(self.run_collect())
+        self.assertEqual(cs.estimate_values({"candidates": []},
+                                            {"candidates": "x"}, {}), set())
+
+
+
 if __name__ == "__main__":
     unittest.main()

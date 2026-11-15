@@ -234,7 +234,13 @@ def estimate_values(report: dict, sorted_json, manifest) -> set:
     run = report.get("run")
     add(run.get("cost_usd") if isinstance(run, dict) else None)
     if isinstance(sorted_json, dict):
-        for c in sorted_json.get("candidates") or []:
+        # candidates is engine-authored sorted JSON nothing validates between
+        # the file read and here: a non-list candidates (an int) crashes the
+        # loop below — same class as report.candidates above, and ranked_ids
+        # already isinstance-guards its own read — so read it only when it is
+        # a list; any other shape lands in the no-candidates tier.
+        sorted_cands = sorted_json.get("candidates")
+        for c in sorted_cands if isinstance(sorted_cands, list) else []:
             if isinstance(c, dict):
                 for k in ("score", "impact", "rationale", "rank"):
                     add(c.get(k))
