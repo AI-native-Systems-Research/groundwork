@@ -50,12 +50,17 @@ class IsolatedEnv(unittest.TestCase):
         self.cfg.mkdir()
 
     def env(self, **extra):
-        # XDG_CONFIG_HOME is stripped, not merged: GitHub runners export
-        # XDG_CONFIG_HOME=/home/runner/.config and mock.patch.dict merges
-        # without clearing, so config_home()'s XDG branch would beat the
-        # Path.home() default the tests assert. Tests that exercise the
-        # XDG branch (or any XDG-sensitive fallback) set it back explicitly.
-        base = {"HOME": str(self.home), "INVESTIGATION_CONFIG_HOME": str(self.cfg),
+        # XDG_CONFIG_HOME, INVESTIGATION_CONFIG_HOME and INVESTIGATION_RUNS
+        # are stripped, not merged: mock.patch.dict merges without clearing,
+        # so an ambient value would survive and beat the branch the test
+        # asserts (GitHub runners export XDG_CONFIG_HOME=/home/runner/.config;
+        # the other two are the same hazard with no known runner that trips
+        # them). The empty string is falsy, so _config treats each var as
+        # unset and falls through to its default. Tests that exercise one of
+        # these branches set it back explicitly.
+        base = {"HOME": str(self.home),
+                "INVESTIGATION_CONFIG_HOME": str(self.cfg),
+                "INVESTIGATION_RUNS": "",
                 "XDG_CONFIG_HOME": ""}
         base.update(extra)
         return base
@@ -104,9 +109,9 @@ class TestConfigHome(IsolatedEnv):
     def test_xdg_fallback_without_investigation_home(self):
         # No INVESTIGATION_CONFIG_HOME: the home is XDG_CONFIG_HOME/investigation.
         xdg = self.tmp / "xdg"
-        env = self.env()
-        env.pop("INVESTIGATION_CONFIG_HOME")
-        with mock.patch.dict(os.environ, {**env, "XDG_CONFIG_HOME": str(xdg)}):
+        with mock.patch.dict(os.environ, {**self.env(),
+                                          "INVESTIGATION_CONFIG_HOME": "",
+                                          "XDG_CONFIG_HOME": str(xdg)}):
             self.assertEqual(_config.config_home(), xdg / "investigation")
 
     def test_investigation_home_wins_over_xdg(self):
@@ -116,9 +121,8 @@ class TestConfigHome(IsolatedEnv):
             self.assertEqual(_config.config_home(), self.cfg)
 
     def test_default_is_home_config_investigation(self):
-        env = self.env()
-        env.pop("INVESTIGATION_CONFIG_HOME")
-        with mock.patch.dict(os.environ, env):
+        with mock.patch.dict(os.environ, {**self.env(),
+                                          "INVESTIGATION_CONFIG_HOME": ""}):
             self.assertEqual(
                 _config.config_home(),
                 self.home / ".config" / "investigation")
@@ -192,34 +196,26 @@ class TestRunsRoot(IsolatedEnv):
         # runs_root(None) with a broken machine config must not crash: the
         # caller asked where runs live, not whether the config parses.
         (self.cfg / "config.yaml").write_text("foo: [unclosed\n")
-        env = self.env()
-        env.pop("INVESTIGATION_RUNS", None)
-        with mock.patch.dict(os.environ, env):
+        with mock.patch.dict(os.environ, self.env()):
             self.assertEqual(_config.runs_root(),
                              Path("~/.cache/investigation").expanduser())
 
     def test_machine_runs_dir_is_used(self):
         (self.cfg / "config.yaml").write_text(f"runs_dir: {self.tmp}/mrd\n")
-        env = self.env()
-        env.pop("INVESTIGATION_RUNS", None)
-        with mock.patch.dict(os.environ, env):
+        with mock.patch.dict(os.environ, self.env()):
             self.assertEqual(_config.runs_root(), self.tmp / "mrd")
 
     def test_empty_machine_runs_dir_falls_back_to_default(self):
         # runs_dir: null -> safe_load -> {"runs_dir": None} -> DEFAULT_RUNS,
         # the same fallback as a machine config with no runs_dir key at all.
         (self.cfg / "config.yaml").write_text("runs_dir:\n")
-        env = self.env()
-        env.pop("INVESTIGATION_RUNS", None)
-        with mock.patch.dict(os.environ, env):
+        with mock.patch.dict(os.environ, self.env()):
             self.assertEqual(_config.runs_root(),
                              Path("~/.cache/investigation").expanduser())
 
     def test_passed_machine_dict_short_circuits_load(self):
         # An explicit machine dict must be used as-is: no config read.
-        env = self.env()
-        env.pop("INVESTIGATION_RUNS", None)
-        with mock.patch.dict(os.environ, env), \
+        with mock.patch.dict(os.environ, self.env()), \
                 mock.patch.object(_config, "load_machine_config",
                                   side_effect=AssertionError(
                                       "must not be called")):
