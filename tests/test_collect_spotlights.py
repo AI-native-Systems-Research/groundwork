@@ -357,10 +357,6 @@ class SpotlightsCollectTest(unittest.TestCase):
         self.assertFalse((self.study / "collection.json").exists())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ManifestAndCandidatesShapeDriftTest(unittest.TestCase):
     """The manifest.target/cost and report.candidates shape-drift faces
     (supervisor directive cycle 84, reviewer 6ba8dc80-8ef) — the residual
@@ -578,3 +574,7 @@ class ManifestAndCandidatesShapeDriftTest(unittest.TestCase):
         self.assertEqual(sec["objective"], "reduce median TTFT")
         self.assertEqual(sec["target"]["commit_sha"], self.sha)
         self.assertEqual(len(sec["claims_draft"]), 3)
+
+
+if __name__ == "__main__":
+    unittest.main()
