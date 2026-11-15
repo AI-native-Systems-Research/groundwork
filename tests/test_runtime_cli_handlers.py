@@ -454,10 +454,15 @@ class ExportCommand(Base):
 
     def test_reexport_sweeps_a_crash_leftover_old_dir(self):
         # export_study swaps each subdir via rename: dest -> .<sub>.old,
-        # tmp -> dest, rmtree(.old). A crash between the two renames leaves
-        # .<sub>.old on disk; the next export must remove that leftover
-        # (export.py:89) before swapping again, so the stale copy cannot
-        # accumulate or survive as a second source of records.
+        # tmp -> dest, rmtree(.old). The state planted below (live requests/
+        # present AND .requests.old present) models a crash after the second
+        # rename (export.py:91) and before the rmtree (:93); the next export
+        # must sweep that leftover (:88-89) before swapping again, so the
+        # stale copy cannot accumulate or survive as a second source of
+        # records. A crash between the two renames instead leaves dest absent
+        # + .old present, which the sweep arm — gated behind dest.exists()
+        # at :86 — only sweeps on the export after the next one; whether that
+        # dest-absent window should also be swept is a maintainer decision.
         self.submitted()
         rc, out, err = self.cli("export")
         self.assertEqual(rc, 0, err)
