@@ -178,7 +178,7 @@ scripts/ci-local.sh        run the CI checks locally (not installed)
 - [docs/runtime-integration-spec.md](docs/runtime-integration-spec.md): how
   the approval runtime fits under the skill.
 - [examples/pd-threshold-retro](examples/pd-threshold-retro/): a complete
-  worked investigation, from question to hand score.
+  worked investigation, from question to validated answer.
 
 ## Credits
 
