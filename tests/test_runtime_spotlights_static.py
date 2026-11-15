@@ -452,6 +452,26 @@ class Classify(Base):
         ns = self.classify()
         self.assertTrue(any("not the prepared commit" in w for w in ns.warnings))
 
+    def test_non_object_manifest_degrades_to_a_failed_classification(self):
+        """A run_manifest.json whose top level parses to a JSON list crashed
+        classify() at main with AttributeError: 'list' object has no
+        attribute 'get' (the manifest.target.commit_sha hop). assess()
+        stores the raw _load() value in a["manifest"] BEFORE its isinstance
+        fail-gate returns, so the failed assessment carries the list
+        through, and classify must degrade — recovery calls it on every
+        reconcile of an exited invocation, where the crash would surface as
+        a stuck "classification pending" invocation."""
+        out = self.place(self.rec, "candidates-found")
+        (out / "run_manifest.json").write_text('["not", "a", "manifest"]')
+        ns = self.classify()
+        self.assertEqual(ns.state, "failed")
+        self.assertIn("run_manifest.json missing or unreadable", ns.reason)
+        # a JSON scalar is the same face one spelling over
+        (out / "run_manifest.json").write_text("42")
+        ns = self.classify()
+        self.assertEqual(ns.state, "failed")
+        self.assertIn("run_manifest.json missing or unreadable", ns.reason)
+
 
 # --- collect ----------------------------------------------------------------------
 
@@ -547,6 +567,22 @@ class Collect(Base):
         self.collect(None)                       # retryable
         self.assertEqual(snap, {str(p): (p.stat().st_mtime_ns, p.stat().st_size)
                                 for p in out.rglob("*")})
+
+    def test_non_object_manifest_degrades_to_a_failed_collection(self):
+        """The same list manifest crashed collect() at main too: assess()'s
+        failed dict still feeds the res assembly (spend/versions hops read
+        a["manifest"] raw), so a non-dict manifest must read as no manifest
+        everywhere — spend unknown, no manifest_spotlights_commit, the
+        failed outcome recorded, never a crash out of the adapter."""
+        out = self.place(self.rec, "candidates-found")
+        (out / "run_manifest.json").write_text('["not", "a", "manifest"]')
+        r = self.collect(None)
+        self.assertEqual(r["outcome"], "failed")
+        self.assertIn("run_manifest.json missing or unreadable", r["reason"])
+        self.assertEqual(r["collection"]["state"], "not_run")
+        self.assertEqual(r["spend"]["completeness"], "unknown")
+        self.assertIsNone(r["versions"]["manifest_spotlights_commit"])
+        self.assertEqual(r["claims_draft"], [])
 
 
 # --- cancel (§4.4) and an end-to-end launch with a fake engine -----------------------

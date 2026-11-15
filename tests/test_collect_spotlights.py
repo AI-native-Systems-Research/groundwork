@@ -359,3 +359,222 @@ class SpotlightsCollectTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ManifestAndCandidatesShapeDriftTest(unittest.TestCase):
+    """The manifest.target/cost and report.candidates shape-drift faces
+    (supervisor directive cycle 84, reviewer 6ba8dc80-8ef) — the residual
+    class PRs #113/#115 left open after their run/context/manifest-top-level
+    guards.
+
+    Nothing validates the engine's JSON between the file read and the hops
+    that read it, so a drifted shape escapes main()'s (CouldNotRun,
+    CollectionError) clause, exits 1, and writes NO collection.json — the
+    study keeps only the partial spotlights/ copies, breaking the module
+    docstring's degrade contract. estimate_values is also called directly
+    by results.py:203 (spotlights_estimates), so the manifest.cost face is
+    reachable from the runtime's collect path too.
+
+    Each test corrupts one field of the fixture copy in the toyrepo harness
+    and pins the degrade contract: exit 0, no traceback, collection.json IS
+    written, and the other candidates' claims intact. All four were red at
+    main 8d40c69 with the exact error each docstring names (verified by
+    execution before the fix landed).
+    """
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        root = Path(self._td.name)
+        self.target = root / "toyrepo"
+        (self.target / "toy/cache").mkdir(parents=True)
+        (self.target / "toy/cache/constants.py").write_text(CONSTANTS)
+        (self.target / "toy/cache/policy.py").write_text(POLICY)
+        git(root, "init", "-q", str(self.target))
+        git(self.target, "add", ".")
+        git(self.target, "commit", "-qm", "c1")
+        self.sha = git(self.target, "rev-parse", "HEAD")
+        self.study = self.target / "investigations" / "s1"
+        self.study.mkdir(parents=True)
+        self.run_dir = root / "runs" / "spotlights-a"
+        shutil.copytree(RUN, self.run_dir)
+        mp = self.run_dir / "run_manifest.json"
+        m = json.loads(mp.read_text())
+        m["target"]["commit_sha"] = self.sha
+        mp.write_text(json.dumps(m, indent=2))
+
+    def rewrite_manifest(self, fn):
+        mp = self.run_dir / "run_manifest.json"
+        m = json.loads(mp.read_text())
+        fn(m)
+        mp.write_text(json.dumps(m, indent=2))
+
+    def rewrite_report(self, fn):
+        rp = self.run_dir / "result.json"
+        r = json.loads(rp.read_text())
+        fn(r["report"])
+        rp.write_text(json.dumps(r))
+
+    def run_collect(self, *extra):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "--study", str(self.study),
+             "--run-dir", str(self.run_dir), *extra],
+            capture_output=True, text=True)
+
+    def assert_collected(self, r):
+        """The degrade contract: exit 0, no traceback, collection.json IS
+        written, and the run-a ranking's other claims (0002/0001/0003) are
+        intact — a hostile manifest/report shape must not cost anyone's
+        citation."""
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertTrue((self.study / "collection.json").is_file(),
+                        "collection.json must be written even when an "
+                        "engine-authored block is in a hostile shape")
+        sec = json.loads((self.study / "collection.json").read_text())["spotlights"]
+        self.assertEqual([c["candidate_id"] for c in sec["claims_draft"]],
+                         ["cand-toy_cache-0002", "cand-toy_cache-0001",
+                          "cand-toy_cache-0003"])
+        return sec
+
+    # --- manifest.target ---------------------------------------------------
+
+    def test_manifest_target_list_degrades_to_no_target(self):
+        """manifest.target=['x'] crashed at main with AttributeError: 'list'
+        object has no attribute 'get' (:347 target.get('commit_sha')), exit
+        1, no collection.json. With --sha the citations still draft and the
+        section reads a target without fields (repo_url/commit_sha absent,
+        not a crash)."""
+        self.rewrite_manifest(lambda m: m.__setitem__("target", ["x"]))
+        sec = self.assert_collected(self.run_collect("--sha", self.sha))
+        self.assertIsNone(sec["target"]["commit_sha"])
+        self.assertIsNone(sec["target"]["repo_url"])
+
+    def test_manifest_target_string_without_sha_gives_the_no_sha_note(self):
+        """manifest.target='str' is the same face one spelling over. Without
+        --sha there is no commit to cite at: the EXISTING no-sha note fires
+        (the documented degrade tier), exit 0, no claims — never a crash."""
+        self.rewrite_manifest(lambda m: m.__setitem__("target", "str"))
+        r = self.run_collect()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        sec = json.loads((self.study / "collection.json").read_text())["spotlights"]
+        self.assertEqual(sec["claims_draft"], [])
+        self.assertTrue(any("no target commit sha" in n for n in sec["notes"]),
+                        sec["notes"])
+
+    def test_manifest_target_int_is_the_same_face(self):
+        """A scalar target (7) crashed at main with AttributeError: 'int'
+        object has no attribute 'get' (:347) — the guard is the isinstance
+        shape, not a list check."""
+        self.rewrite_manifest(lambda m: m.__setitem__("target", 7))
+        sec = self.assert_collected(self.run_collect("--sha", self.sha))
+        self.assertIsNone(sec["target"]["commit_sha"])
+
+    # --- manifest.cost -----------------------------------------------------
+
+    def test_manifest_cost_list_degrades_to_no_forbidden_estimate(self):
+        """manifest.cost=['x'] crashed at main with AttributeError: 'list'
+        object has no attribute 'get' (estimate_values :247), exit 1, no
+        collection.json — and the same call is reachable from the runtime's
+        collect path (results.py:203 spotlights_estimates). A non-mapping
+        cost contributes no forbidden value: the guard only ever forbids,
+        so absence is safe, and every candidate still cites."""
+        self.rewrite_manifest(lambda m: m.__setitem__("cost", ["x"]))
+        sec = self.assert_collected(self.run_collect())
+        # the estimate guard still works on the intact parts of the manifest
+        self.assertEqual(cs.estimate_values({"candidates": []}, None, {"cost": ["x"]}),
+                         set())
+        self.assertEqual(cs.estimate_values(
+            {"candidates": []}, None, {"cost": {"amount_usd": 5}}),
+            cs.estimate_values({"candidates": []}, None, {"cost": {"amount_usd": 5.0}}))
+
+    def test_manifest_cost_string_and_int_are_the_same_face(self):
+        """cost='x' and cost=7 crashed at main with AttributeError: 'str'/
+        'int' object has no attribute 'get' (:247)."""
+        for shape in ("x", 7):
+            with self.subTest(cost=shape):
+                self.rewrite_manifest(lambda m, s=shape: m.__setitem__("cost", s))
+                r = self.run_collect()
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertTrue((self.study / "collection.json").is_file())
+                # reset the fixture for the next subTest
+                shutil.rmtree(self.run_dir)
+                shutil.copytree(RUN, self.run_dir)
+                mp = self.run_dir / "run_manifest.json"
+                m = json.loads(mp.read_text())
+                m["target"]["commit_sha"] = self.sha
+                mp.write_text(json.dumps(m, indent=2))
+
+    # --- report.candidates -------------------------------------------------
+
+    def test_report_candidates_int_degrades_to_no_candidates(self):
+        """report.candidates=7 crashed at main with TypeError: 'int' object
+        is not iterable (:305's comprehension AND estimate_values :221),
+        exit 1, no collection.json. A non-list candidates reads as a report
+        with no candidates: no claims, and the copies still land."""
+        self.rewrite_report(lambda rep: rep.__setitem__("candidates", 7))
+        r = self.run_collect("--sha", self.sha)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        sec = json.loads((self.study / "collection.json").read_text())["spotlights"]
+        self.assertEqual(sec["claims_draft"], [])
+        self.assertEqual(sec["n_candidates"], 0)
+        self.assertTrue((self.study / "spotlights" / "result.json").is_file())
+
+    def test_report_candidates_string_is_the_same_face(self):
+        """candidates='cand-0001' would iterate per-character at main; the
+        guard is the isinstance-list shape, so a string also reads as no
+        candidates."""
+        self.rewrite_report(lambda rep: rep.__setitem__("candidates", "cand-0001"))
+        r = self.run_collect("--sha", self.sha)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sec = json.loads((self.study / "collection.json").read_text())["spotlights"]
+        self.assertEqual(sec["claims_draft"], [])
+
+    # --- report.run / report.context (this branch's own guard at the
+    #     section hop; PR #115 guards the same faces its own way) ---------
+
+    def test_report_run_list_reaches_the_run_section(self):
+        """report.run=['x'] reached estimate_values :229 and the :423 run
+        section at main. This branch guards both hops itself (isinstance
+        before .get), so a non-mapping run means no run_id/pipeline — with
+        the manifest's run_id as the fallback."""
+        self.rewrite_report(lambda rep: rep.__setitem__("run", ["x"]))
+        sec = self.assert_collected(self.run_collect())
+        self.assertIsNone(sec["pipeline"])
+        self.assertEqual(sec["run_id"], "run-toy0001")  # manifest fallback
+
+    def test_report_context_list_degrades_to_no_objective(self):
+        """report.context=['objective'] crashed at main at the :428
+        objective hop — AFTER the citations were drafted, so the run's work
+        was lost at the last hop. A non-mapping context reads as no
+        objective."""
+        self.rewrite_report(lambda rep: rep.__setitem__("context", ["objective"]))
+        sec = self.assert_collected(self.run_collect())
+        self.assertIsNone(sec["objective"])
+
+    # --- project_tree (PR #113 owns the site; this branch carries the same
+    #     guard so it is self-contained — pin it here) ---------------------
+
+    def test_project_tree_list_degrades_to_no_source_root(self):
+        """report.project_tree=['toy','cache'] crashed at main with
+        AttributeError at the :365 source_root chain. A non-mapping tree
+        means no source_root — the existing None path — and every candidate
+        still cites normally."""
+        self.rewrite_report(lambda rep: rep.__setitem__("project_tree", ["toy", "cache"]))
+        self.assert_collected(self.run_collect())
+
+    # --- no over-blocking ----------------------------------------------------
+
+    def test_intact_manifest_and_report_still_populate_the_section(self):
+        """No over-blocking: the untouched fixture populates target,
+        run_id and pipeline exactly as before, so the guards tolerate every
+        well-formed spelling."""
+        sec = self.assert_collected(self.run_collect())
+        self.assertEqual(sec["run_id"], "run-toy0001")
+        self.assertEqual(sec["pipeline"], "deep_research")
+        self.assertEqual(sec["objective"], "reduce median TTFT")
+        self.assertEqual(sec["target"]["commit_sha"], self.sha)
+        self.assertEqual(len(sec["claims_draft"]), 3)
