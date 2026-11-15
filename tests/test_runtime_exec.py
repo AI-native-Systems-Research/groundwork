@@ -6,6 +6,7 @@ tearDown SIGKILLs every process whose command line contains this test's
 temp-dir name (supervisors, engines, their children).
 """
 import contextlib
+import datetime as dt
 import inspect
 import io
 import json
@@ -774,6 +775,32 @@ class Limits(unittest.TestCase):
         (b,) = rep["time_budgets"]
         self.assertEqual((b["budget_s"], b["exceeded"]), (3600.0, True))
         self.assertEqual(L.spend_unknown("x")["reported_usd"], None)
+
+    def test_time_seconds_rejects_non_numeric_values(self):
+        # A labelled time budget whose value is a string or bool is not a
+        # budget: no crash, no silent 0 — None, so `exceeded` stays False.
+        self.assertIsNone(L.time_seconds("wall_clock_hours", "2"))
+        self.assertIsNone(L.time_seconds("wall_clock_hours", True))
+        self.assertEqual(L.time_seconds("wall_clock_hours", 2), 7200.0)
+        self.assertEqual(L.time_seconds("wall_clock_minutes", 30), 1800.0)
+
+    def test_elapsed_report_with_unparseable_timestamps(self):
+        # created_at that is not an RFC 3339 timestamp parses to None: the
+        # elapsed time is unknown (never a crash, never a made-up 0) and no
+        # budget can be reported exceeded against it.
+        rec = self.rec(labelled=[{"name": "wall_clock_hours", "value": 1,
+                                  "enforced_by": "advisory"}])
+        inv = {"created_at": "garbage", "ended_at": "2026-11-09T12:00:00.000000Z"}
+        rep = L.elapsed_report(inv, rec)
+        self.assertIsNone(rep["elapsed_s"])
+        (b,) = rep["time_budgets"]
+        self.assertEqual((b["budget_s"], b["exceeded"]), (3600.0, False))
+        # a garbage ended_at falls back to `now` when given, else wall clock
+        inv2 = {"created_at": "2026-11-09T10:00:00.000000Z", "ended_at": "garbage"}
+        rep2 = L.elapsed_report(inv2, rec,
+                                now=dt.datetime(2026, 11, 9, 12, tzinfo=dt.timezone.utc))
+        self.assertEqual(rep2["elapsed_s"], 7200.0)
+        self.assertTrue(rep2["time_budgets"][0]["exceeded"])
 
     def test_no_count_caps(self):
         self.assertFalse(any("count" in g["name"] or "max_invocations" in g["name"]
