@@ -50,7 +50,13 @@ class IsolatedEnv(unittest.TestCase):
         self.cfg.mkdir()
 
     def env(self, **extra):
-        base = {"HOME": str(self.home), "INVESTIGATION_CONFIG_HOME": str(self.cfg)}
+        # XDG_CONFIG_HOME is stripped, not merged: GitHub runners export
+        # XDG_CONFIG_HOME=/home/runner/.config and mock.patch.dict merges
+        # without clearing, so config_home()'s XDG branch would beat the
+        # Path.home() default the tests assert. Tests that exercise the
+        # XDG branch (or any XDG-sensitive fallback) set it back explicitly.
+        base = {"HOME": str(self.home), "INVESTIGATION_CONFIG_HOME": str(self.cfg),
+                "XDG_CONFIG_HOME": ""}
         base.update(extra)
         return base
 
