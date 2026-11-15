@@ -15,9 +15,16 @@ Two layers, on purpose:
 
 Lines covered (never-reached at main 8d40c69, CI run 43504194546):
 199, 288, 329-331, 335, 363, 376-379, 410-411, 427-428, 436, 453, 475,
-489, 491, 496, 545, 613. Line 77 (the sys.path insert) is exercised by the
-FreshImport child and provably executes there, but no coverage core records
-an event for the one-line if-body, so the file measures 99%, not 100%.
+489, 491, 496, 545, 613. Line 77 (the sys.path insert's one-line body) is
+UNREACHABLE at main, not a measurement artifact: results.py imports
+.adapters (line 66) before the line-76 guard, and the adapter chain
+(nous.py, spotlights_static.py, gitstate.py) has already inserted the same
+SCRIPTS dir by then, so the guard is False in every interpreter that
+imports results — parent or child (reviewer 88a790ff-e0d, supervisor-
+confirmed 9ac85e7d-119: fresh-interpreter line tracing fires at 76 and 78
+but never 77). The FreshImport test below locks the POSTCONDITION that
+insert exists for (SCRIPTS absolute on sys.path, sibling import by name
+after chdir('/')), not the line's execution, so the file measures 99%.
 
 Run from the repo root:  python3 -m unittest tests.test_runtime_results_guards -v
 """
@@ -413,15 +420,19 @@ class SmallGuards(unittest.TestCase):
 
 class FreshImport(unittest.TestCase):
     def test_import_adds_the_scripts_dir_for_sibling_modules(self):
-        # Line 77 exists for the fresh-interpreter shape: a process that
-        # imports ains_runtime.results with the scripts dir reachable only as
-        # a relative sys.path entry (cwd) must end up with the ABSOLUTE
-        # scripts dir on sys.path, so a later `import collect_spotlights`
-        # (the documented sibling-module import: _collection, _config,
+        # The postcondition line 77 exists for: a process that imports
+        # ains_runtime.results with the scripts dir reachable only as a
+        # relative sys.path entry (cwd) must end up with the ABSOLUTE scripts
+        # dir on sys.path, so a later `import collect_spotlights` (the
+        # documented sibling-module import: _collection, _config,
         # collect_spotlights are imported by name from these modules) works
-        # no matter what the cwd is later. The test process imports through
-        # tests/_runtime_util.py, which puts SCRIPTS on the path before
-        # ains_runtime is ever imported, so this runs only in a child.
+        # no matter what the cwd is later. NB: the insert at line 77 itself
+        # is unreachable at main (the adapter imports at line 66 insert the
+        # same dir first, so the line-76 guard is always False) — the test
+        # locks the postcondition, NOT the line's execution. The test
+        # process imports through tests/_runtime_util.py, which puts SCRIPTS
+        # on the path before ains_runtime is ever imported, so this runs
+        # only in a child.
         code = ("import sys\n"
                 "import ains_runtime.results as RS\n"
                 "assert str(RS.SCRIPTS) in sys.path, RS.SCRIPTS\n"
