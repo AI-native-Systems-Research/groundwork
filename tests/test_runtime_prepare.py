@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _runtime_fake_adapter as fake  # noqa: E402
@@ -225,6 +226,35 @@ class CleanTree(Base):
     def test_not_a_repo(self):
         with self.assertRaises(gitstate.GitStateError):
             gitstate.snapshot(self.tmp / "runs")
+
+    def test_empty_repo_has_no_head_commit(self):
+        # head_commit's refusal (gitstate.py:63): a repo with no commits is a
+        # work tree (toplevel resolves) but has no HEAD to pin, so snapshot
+        # must refuse — "approximated by HEAD" is what the spec forbids.
+        empty = self.tmp / "empty-repo"
+        empty.mkdir()
+        git(empty, "init", "-q", "-b", "main")
+        self.assertEqual(gitstate.toplevel(empty), empty)
+        with self.assertRaisesRegex(gitstate.GitStateError,
+                                    "no HEAD commit"):
+            gitstate.snapshot(empty)
+
+    def test_git_status_failure_is_refused_not_crashed(self):
+        # dirty_paths' refusal (gitstate.py:73): _config.git returns None on
+        # a failed/missing/timeout git run; a None porcelain result must
+        # surface as GitStateError, never as "clean" (a broken git would
+        # otherwise wave a dirty target through prepare).
+        real_git = gitstate._config.git
+
+        def status_fails(*args, cwd=None):
+            if args[:2] == ("status", "--porcelain"):
+                return None
+            return real_git(*args, cwd=cwd)
+
+        with mock.patch.object(gitstate._config, "git", status_fails):
+            with self.assertRaisesRegex(gitstate.GitStateError,
+                                        "git status failed"):
+                gitstate.dirty_paths(self.repo)
 
 
 class Approve(Base):
