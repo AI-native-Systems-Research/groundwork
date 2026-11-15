@@ -43,8 +43,13 @@ class ModuleHelpers(unittest.TestCase):
         # A broken machine config must not crash the probe: it degrades to
         # doctor's defaults (the same offline record doctor itself reports).
         import _config
+        import doctor
+        # doctor.shutil.which must be pinned too: found reflects the ambient
+        # PATH (this skill installs spotlights-engine for its users, so the
+        # probe finds it on exactly the machines it targets).
         with mock.patch.object(_config, "load_machine_config",
-                               side_effect=_config.ConfigError("bad yaml")):
+                               side_effect=_config.ConfigError("bad yaml")), \
+             mock.patch.object(doctor.shutil, "which", return_value=None):
             p = SS._default_probe(None)
         self.assertEqual(set(p), {"found", "source", "path", "sha", "pin"})
         self.assertFalse(p["found"])
