@@ -89,7 +89,10 @@ class UpdateCollectionCrashCleanup(unittest.TestCase):
 
         with mock.patch("os.replace", side_effect=OSError("disk full")), \
                 mock.patch("os.unlink", side_effect=flaky_unlink):
-            with self.assertRaises(OSError):
+            # assertRaisesRegex, not assertRaises: a bare OSError also
+            # passes if the cleanup's own failure replaces the original
+            # error, which is exactly what this test exists to forbid.
+            with self.assertRaisesRegex(OSError, "disk full"):
                 C.merge_section(self.study, "nous", {"run_id": "new"})
         self.assertEqual(
             json.loads((self.study / "collection.json").read_text())["nous"],
