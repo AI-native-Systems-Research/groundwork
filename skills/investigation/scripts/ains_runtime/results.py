@@ -389,9 +389,16 @@ def run_validator(store: Store, inv_id: str, answer: Path | None, *,
                   f"--- stdout\n{so}--- stderr\n{se}", encoding="utf-8")
     first = next((ln for ln in se.splitlines() if ln and not ln.startswith("warning:")),
                  "")
+    # _ref, not make_ref: the answer may have become unreadable since the
+    # subprocess opened it (permissions changed under us) — run_validator
+    # never raises, and contracts.py makes both refs optional, so the
+    # failed verdict and the report_ref survive without the answer_ref.
     out = {"state": "passed" if rc == 0 else "failed", "validator": VALIDATOR_NAME,
-           "exit_code": rc, "answer_ref": make_ref("answer-json", answer),
-           "report_ref": make_ref("validator-report", rp)}
+           "exit_code": rc}
+    ar = _ref("answer-json", answer)
+    if ar is not None:
+        out["answer_ref"] = ar
+    out["report_ref"] = _ref("validator-report", rp)
     if rc != 0:
         out["reason"] = (f"exit {rc}" if rc is not None else "did not finish") + (
             f": {first}" if first else "")
