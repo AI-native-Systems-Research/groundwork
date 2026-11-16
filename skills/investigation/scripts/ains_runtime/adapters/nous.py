@@ -491,6 +491,12 @@ class NousAdapter(Adapter):
             if sem.get(k) is not None:
                 doc[k] = sem[k]
         assert set(doc) <= set(CAMPAIGN_KEYS), sorted(set(doc) - set(CAMPAIGN_KEYS))
+        # The docstring's "never prompts.*/metadata/..." promise, as a check:
+        # the ignored_keys fact is what check_semantics cannot express (those
+        # keys are not in the adapter's material policy at all, so they are
+        # rejected before rendering; this guards the rendered output anyway).
+        assert not (set(doc) & set(IGNORED_KEYS)), \
+            sorted(set(doc) & set(IGNORED_KEYS))
         return doc
 
     @staticmethod
