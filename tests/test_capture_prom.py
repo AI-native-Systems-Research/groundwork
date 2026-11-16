@@ -690,6 +690,92 @@ class TestHTTPErrorBodyReadFailure(Base):
         self.assertNotIn("Traceback", r.stdout)
 
 
+class TestSuccessBodyTruncation(Base):
+    """A 200 whose body never arrives in full: the server answers the status
+    line, announces a Content-Length, delivers a fragment, then closes (or
+    resets). urllib raises http.client.IncompleteRead out of r.read() — an
+    HTTPException that is NOT an OSError, so the request-failure branch below
+    the urlopen block does not match it either — and pre-fix the exception
+    escaped query_range and killed the whole CLI with a traceback instead of
+    recording the query as failed. Both close shapes are pinned: the orderly
+    FIN (IncompleteRead — the crashing face, red at pre-fix main) and the RST
+    (ConnectionResetError, an OSError the sibling branch already classifies
+    correctly — pinned so the two faces can't diverge)."""
+
+    BAD = "bad"     # any query whose promql is not vllm_running gets the abort
+
+    @staticmethod
+    def handler_for(mode):
+        ok = (FIX / "query_range-vllm_running.json").read_bytes()
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                form = urllib.parse.parse_qs(self.rfile.read(n).decode())
+                if "vllm_running" in form["query"][0]:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(ok)))
+                    self.end_headers()
+                    self.wfile.write(ok)
+                    return
+                # A 200 that announces the full fixture but delivers only a
+                # fragment, then breaks the connection mid-body.
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(ok)))
+                self.end_headers()
+                self.wfile.write(ok[:40])
+                time.sleep(0.05)
+                if mode == "reset":
+                    # SO_LINGER 0: the close sends an RST, so the client's
+                    # r.read() raises ConnectionResetError instead.
+                    self.connection.setsockopt(
+                        socket.SOL_SOCKET, socket.SO_LINGER,
+                        struct.pack("ii", 1, 0))
+                # Either way (RST or FIN) the body never arrives in full.
+                self.close_connection = True
+                self.connection.close()
+        return H
+
+    def capture(self, mode):
+        q = self.tmp / "q.yaml"
+        q.write_text(f"good: vllm_running\n{self.BAD}: up(1)\n")
+        handler = self.handler_for(mode)
+        with FakeServer(handler) as p:
+            r = self.run_cli("--url", p.url, "--queries", str(q))
+        return r
+
+    def test_truncated_200_body_is_a_per_query_failure(self):
+        r = self.capture("truncate")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"failed: {self.BAD}", r.stdout)
+        cap = json.loads((self.cap_dir() / "capture.json").read_text())
+        self.assertIn("request failed", cap["failed_queries"][self.BAD])
+        self.assertIn("IncompleteRead", cap["failed_queries"][self.BAD])
+        # A partial failure, not a total one: the good query is still captured.
+        self.assertEqual([p.name for p in (self.cap_dir() / "prom").iterdir()],
+                         ["good.json"])
+        # The CLI must not die with a traceback over this.
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertNotIn("Traceback", r.stdout)
+
+    def test_reset_mid_200_body_is_a_per_query_failure(self):
+        r = self.capture("reset")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"failed: {self.BAD}", r.stdout)
+        cap = json.loads((self.cap_dir() / "capture.json").read_text())
+        self.assertIn("request failed", cap["failed_queries"][self.BAD])
+        self.assertIn("ConnectionResetError", cap["failed_queries"][self.BAD])
+        self.assertEqual([p.name for p in (self.cap_dir() / "prom").iterdir()],
+                         ["good.json"])
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertNotIn("Traceback", r.stdout)
+
+
 class TestRunGuards(Base):
     """run()'s argument and environment guards, via the CLI (exit code 2)."""
 
