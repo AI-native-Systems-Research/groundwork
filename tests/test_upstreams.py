@@ -72,7 +72,7 @@ class GeneratedDocs(unittest.TestCase):
         text = (SKILL / "references" / "method-plan.md").read_text()
         self.assertIn(U.representability_table_md(), text,
                       "method-plan.md's representability table differs from blis.json; "
-                      "regenerate it: python3 scripts/verify_upstreams.py --write-docs")
+                      "regenerate it: python3 skills/investigation/scripts/verify_upstreams.py --write-docs")
 
 
 class NoRestatedUpstreamFacts(unittest.TestCase):
@@ -105,6 +105,7 @@ class NoRestatedUpstreamFacts(unittest.TestCase):
             "references/sim2real.md": ["28a8e98"],
             "references/telemetry.md": ["2f1cba799e", "618eb0a9"],
             "assets/promql/starter.yaml": ["2f1cba799e", "618eb0a9"],
+            "references/answer-contract.md": ["618eb0a9"],
         }
         for rel, shas in banners.items():
             text = (SKILL / rel).read_text()
@@ -128,6 +129,36 @@ class NoRestatedUpstreamFacts(unittest.TestCase):
             hits = self.LINE_CITE.findall(path.read_text())
             with self.subTest(file=str(path.relative_to(ROOT))):
                 self.assertEqual(hits, [], "cite upstream source in the facts file instead")
+
+
+class FactSourcedConstants(NoRestatedUpstreamFacts):
+    """Code constants that restate an upstream enum must be read from the
+    facts file instead, so a lock bump that changes the enum fails loudly
+    here rather than drifting silently in code. The structural tests above
+    (LINE_CITE, no locked commits) cannot see this class of drift: an enum
+    restated as a bare tuple cites nothing and pins no version."""
+
+    def test_contracts_task_types_is_the_nous_fact(self):
+        # ains_runtime.contracts enforces body.task_type on every
+        # experiment-request via v.enum("task_type", TASK_TYPES); the enum
+        # is Nous v2's, so it must come from nous.json, not a restatement.
+        from ains_runtime import contracts
+        self.assertEqual(tuple(U.fact("nous", "task_types")),
+                         contracts.TASK_TYPES)
+
+    def test_nous_task_types_fact_is_not_restated_in_code(self):
+        # The restated-tuple shape this fact replaced: a literal spelling of
+        # the enum in any scanned file means someone bypassed the fact.
+        enum_re = re.compile(
+            r'["\'](?:debug|verify|optimize|policy|explain|other)["\']'
+            r'[^)\n]*["\'](?:debug|verify|optimize|policy|explain|other)["\']')
+        for path in self.SCAN:
+            hits = enum_re.findall(path.read_text())
+            with self.subTest(file=str(path.relative_to(ROOT))):
+                self.assertEqual(
+                    hits, [],
+                    "restate the Nous task_type enum in code; read "
+                    "upstreams.fact('nous', 'task_types') instead")
 
 
 class LockEnforced(unittest.TestCase):
@@ -293,6 +324,33 @@ class FactValuesAreNotRestated(unittest.TestCase):
                         f"{stem}.py: {name} is loaded from a fact but never "
                         "used; either consume it or the code is restating "
                         "the fact as literals")
+
+
+class FactSourcedReason(unittest.TestCase):
+    """A reason string a shipped script builds from an upstreams fact,
+    coupled to the fact so a lock bump that changes the fact's value fails
+    loudly instead of leaving prose in code or docs drifting silently.
+
+    Named FactSourcedReason, not FactSourcedConstants: the parallel class in
+    this file that tests constants read from facts (the Nous task_types gate)
+    owns that name on another branch, and two same-named classes in one
+    module make Python bind only the later one — the other's tests silently
+    stop running while CI stays green. Distinct gate, distinct name."""
+
+    def test_doctor_reason_uses_the_spotlights_stage01_fact(self):
+        # doctor's spotlights-telemetry unavailability reason is built from
+        # the stage01_inputs fact; the fact must exist and hold the two
+        # shapes stage 01 accepts, or the reason's build (and its fallback
+        # equality) is grounded in nothing.
+        f = U.fact("spotlights", "stage01_inputs")
+        self.assertIn("signals_files", f)
+        self.assertIn("otel_discriminator", f)
+        self.assertTrue(f["signals_files"], "signals_files is empty")
+        # The F1 caveat in spotlights.md points at this fact by name rather
+        # than restating the filenames; the pointer must stay true.
+        text = (SKILL / "references" / "spotlights.md").read_text()
+        self.assertIn("stage01_inputs", text)
+        self.assertIn("upstreams/spotlights.json", text)
 
 
 if __name__ == "__main__":

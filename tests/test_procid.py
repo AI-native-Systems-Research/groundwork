@@ -268,13 +268,24 @@ class ProcIdentity(ProcIdTest):
         zombie = None
 
         def find_zombie():
+            # Only the helper's own child (ppid == helper.pid): the helper
+            # never reaps it, so it stays a zombie for the whole test. A
+            # scan that latches onto ANY zombie in /proc races every other
+            # parent on the host — a foreign zombie reaped between this
+            # scan and the assertions below makes start_time(...,
+            # include_zombie=True) return None and the test flake.
             nonlocal zombie
             for pid in os.listdir("/proc"):
-                if pid.isdigit():
-                    ident = procid.identity(int(pid), include_zombie=True)
-                    if ident and ident.zombie:
-                        zombie = ident
-                        return ident
+                if not pid.isdigit() or int(pid) == helper.pid:
+                    continue
+                f = procid._proc_stat_fields(int(pid))
+                # stat fields after comm: f[0] is state, f[1] is ppid.
+                if f is None or len(f) < 2 or f[1] != str(helper.pid):
+                    continue
+                ident = procid.identity(int(pid), include_zombie=True)
+                if ident and ident.zombie:
+                    zombie = ident
+                    return ident
             return None
 
         wait_for(find_zombie, what="a zombie to appear")

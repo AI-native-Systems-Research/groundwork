@@ -4,6 +4,8 @@ A stdlib http.server in a thread plays Prometheus: it answers
 /api/v1/query_range with recorded fixtures under tests/fixtures/prom/,
 chosen by the PromQL text. Nothing here talks to a real cluster.
 """
+import contextlib
+import io
 import json
 import os
 import re
@@ -1187,6 +1189,86 @@ class TestPortForward(Base):
         self.assertEqual(r.returncode, 1)
         self.assertIn("not found", r.stderr)
 
+
+class TestMainSignalHandling(unittest.TestCase):
+    """main()'s KeyboardInterrupt arm: Ctrl-C during a capture is a clean
+    exit 130 with a message, never a traceback (the capture dir is left for
+    the next --capture-id to refuse; captures are frozen either way)."""
+
+    def test_keyboard_interrupt_exits_130_with_a_clean_message(self):
+        args = ["--study", ".", "--capture-id", "c1", "--url", "http://127.0.0.1:9",
+                "--start", START, "--end", END]
+        err = io.StringIO()
+        with mock.patch.object(capture_prom, "run", side_effect=KeyboardInterrupt), \
+                contextlib.redirect_stderr(err):
+            rc = capture_prom.main(args)
+        self.assertEqual(rc, 130)
+        self.assertIn("interrupted", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+
+    def test_capture_error_still_carries_its_own_code(self):
+        # The neighbouring arm this one could shadow: a CaptureError keeps
+        # its own exit code (2 for usage guards, 1 for run failures).
+        args = ["--study", ".", "--capture-id", "c1", "--url", "http://127.0.0.1:9",
+                "--start", START, "--end", END]
+        err = io.StringIO()
+        with mock.patch.object(capture_prom, "run",
+                               side_effect=capture_prom.CaptureError("boom", 2)), \
+                contextlib.redirect_stderr(err):
+            rc = capture_prom.main(args)
+        self.assertEqual(rc, 2)
+        self.assertIn("boom", err.getvalue())
+
+
+class TestSizeGuardRmdir(Base):
+    """The `except OSError: pass` around prom_dir.rmdir() after the bulk
+    move: a capture whose bulk was already relocated must never fail because
+    the (now empty) prom/ directory could not be removed — an NFS
+    silly-rename, a permission, a transient mount state. The moved record in
+    capture.json is the evidence; the empty dir staying behind is harmless.
+    Driven in-process so Path.rmdir can be made to fail exactly there."""
+
+    def test_unremovable_prom_dir_never_fails_the_capture(self):
+        env = {**self.env, "INVESTIGATION_SIZE_GUARD_BYTES": "10"}
+        overrides = {k: str(v) for k, v in env.items()
+                     if k.startswith("INVESTIGATION_")}
+        saved = {k: os.environ[k] for k in overrides if k in os.environ}
+        os.environ.update(overrides)
+
+        def _restore():
+            os.environ.update(saved)
+            for k in overrides:
+                if k not in saved:
+                    os.environ.pop(k, None)
+        self.addCleanup(_restore)
+        called = []
+
+        def busy_rmdir(self):
+            called.append(self)
+            raise OSError("prom dir busy (NFS silly-rename)")
+
+        args = capture_prom.build_parser().parse_args([
+            "--study", str(self.study), "--capture-id", "c1",
+            "--url", "http://127.0.0.1:1",  # replaced below
+            "--start", START, "--end", END, "--step", "30s",
+            "--queries", str(QUERIES)])
+        with FakeProm() as p:
+            args.url = p.url
+            out = io.StringIO()
+            with mock.patch.object(Path, "rmdir", busy_rmdir), \
+                    contextlib.redirect_stdout(out):
+                rc = capture_prom.run(args)
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertEqual(called, [self.cap_dir() / "prom"],
+                         "the guard must fire on prom/ itself, not another dir")
+        cap = json.loads((self.cap_dir() / "capture.json").read_text())
+        self.assertEqual(set(cap["moved"]),
+                         {"prom/running.json", "prom/nothing.json", "metrics.jsonl"})
+        for rel, info in cap["moved"].items():
+            self.assertTrue(Path(info["path"]).is_file(), rel)
+        # The empty prom/ dir stays behind — harmless, never a failure.
+        self.assertTrue((self.cap_dir() / "prom").is_dir())
+        self.assertEqual(list((self.cap_dir() / "prom").iterdir()), [])
 
 if __name__ == "__main__":
     unittest.main()

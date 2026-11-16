@@ -19,7 +19,7 @@ VALIDATOR = SCRIPTS / "validate_answer.py"
 CAP = Path(__file__).resolve().parent / "fixtures" / "telemetry" / "cap-a"
 
 sys.path.insert(0, str(SCRIPTS))
-from _telemetry import sha256_file  # noqa: E402
+from _telemetry import prom_path, sha256_file  # noqa: E402
 
 
 def run(study, capture_id="cap-a"):
@@ -172,6 +172,17 @@ class TelemetryCollectTest(unittest.TestCase):
         r = run(self.study, "nope")
         self.assertEqual(r.returncode, 1)
         self.assertFalse((self.study / "collection.json").exists())
+
+    def test_prom_path_returns_local_when_not_moved(self):
+        # A prom file that is neither on disk nor in capture.json's `moved`
+        # map resolves to its local (missing) path: the caller reports it as
+        # a missing file rather than crashing on the lookup.
+        cap = json.loads((self.cap_dir / "capture.json").read_text())
+        cap["moved"] = {}
+        (self.cap_dir / "capture.json").write_text(json.dumps(cap))
+        p = prom_path(self.cap_dir, "never_captured")
+        self.assertEqual(p, self.cap_dir / "prom" / "never_captured.json")
+        self.assertFalse(p.is_file())
 
     def test_untouched_capture_summary_not_rewritten(self):
         """The regenerated summary matches capture_prom's byte for byte, so an

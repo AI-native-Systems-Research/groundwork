@@ -31,7 +31,12 @@ runs in `status` / `recover` (recovery.py), through the adapter.
 
 Logs: .runtime/logs/<inv-id>.supervisor.log (the supervisor's own lines,
 secret values redacted) and .runtime/logs/<inv-id>.engine.log (the engine's
-stdout+stderr). Both are provisional until the invocation is terminal.
+stdout+stderr, redacted at exit: the engine legitimately holds the
+request's secret values via env_pass, so anything it echoes about its own
+environment — verbose SDK logging, curl -v, a traceback — is scrubbed with
+the same redact() the supervisor's own lines use before the EXITED
+transition; the bytes results.py later digests as evidence are the
+secret-free ones). Both are provisional until the invocation is terminal.
 
 Engine environment: only the variables named in the launch spec's
 `env_pass` (BASE_ENV_VARS, the preparation's material/file/secret variable
@@ -305,6 +310,42 @@ def engine_env(spec: dict, env: Mapping[str, str]) -> dict:
     return out
 
 
+def redact_engine_log(path: str, env: Mapping[str, str]) -> bool:
+    """Rewrite the engine log with every secret value redacted; True if
+    rewritten.
+
+    The engine log is the engine's raw stdout+stderr, and the engine
+    legitimately holds the request's secret values (engine_env passes
+    env_pass through, and env_pass_names includes the request's
+    secret_vars): a verbose SDK banner, curl -v or an echoing traceback
+    would otherwise persist the credential verbatim under $RUNS and be
+    digested as immutable evidence by results._execution. The supervisor's
+    inherited env knows the values (it passed them), so redact() against it
+    — the same redaction its own lines get — closes the common case at
+    write time. Belt-and-braces for logs written before this fix, or by an
+    older supervisor, lives in results._ref's secret guard.
+    """
+    try:
+        p = Path(path)
+        if not p.is_file():
+            return False
+        data = p.read_bytes()
+        if not data:
+            return False
+        text = data.decode("utf-8", "replace")
+        redacted = redact(text, env)
+        if redacted == text:
+            return False
+        tmp = p.with_name(p.name + ".redacting")
+        tmp.write_text(redacted, encoding="utf-8")
+        os.replace(tmp, p)
+        return True
+    except OSError:
+        # Never fail the exit path over the scrub: the result-time guard in
+        # results._ref still refuses to bind the log as evidence.
+        return False
+
+
 def supervise(store: Store, inv_id: str, *, env: Mapping[str, str] | None = None) -> int:
     """Run one invocation's engine to exit. Returns the supervisor's exit code."""
     env = os.environ if env is None else env
@@ -366,6 +407,16 @@ def supervise(store: Store, inv_id: str, *, env: Mapping[str, str] | None = None
     log(f"engine pid {proc.pid} running")
     crash_point("supervisor:after_running", env, log)
     rc = proc.wait()
+    # The engine's raw output is redacted BEFORE the EXITED transition that
+    # makes the log eligible to be digested as evidence (results._execution
+    # reads the log only from `status`/`result`, both of which run after this
+    # process exits): what results digests is the secret-free bytes. Before
+    # the after_exit crash point too, so even an injected crash there leaves
+    # a redacted log (the result-time guard covers what a dead supervisor
+    # never reached).
+    if redact_engine_log(spec["logs"].get("engine"), env):
+        log("engine log redacted: it contained a secret value from the "
+            "supervisor's environment")
     crash_point("supervisor:after_exit", env, log)
     ok = store.transition(inv_id, (RUNNING,), EXITED, exit_code=rc, ended_at=now(),
                           env=env, where={"engine_pid": proc.pid})

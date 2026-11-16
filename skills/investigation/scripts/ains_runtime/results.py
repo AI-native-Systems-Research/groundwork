@@ -400,15 +400,30 @@ def run_validator(store: Store, inv_id: str, answer: Path | None, *,
 
 # --- the record ----------------------------------------------------------------
 
-def _ref(kind: str, loc, *, final: bool = True) -> dict | None:
+def _ref(kind: str, loc, *, final: bool = True, env: Mapping[str, str] | None = None) -> dict | None:
     """A file gets a digest when final; a directory or a mutable file is
-    provisional (no portable identity, spec §6)."""
+    provisional (no portable identity, spec §6).
+
+    With `env`, a file whose bytes contain a secret value is never bound as
+    evidence: the ref is dropped (None), the same refusal _collect applies
+    to adapter output. This is the belt-and-braces for logs written before
+    the supervisor's exit-time redaction existed (or by an older supervisor):
+    a log that still carries the credential must not be digested into the
+    immutable result record.
+    """
     if not loc:
         return None
     p = Path(loc)
     kind = re.sub(r"[^a-z0-9._-]+", "-", kind.lower()).strip("-.")[:64] or "artifact"
     try:
         if p.is_file():
+            if env is not None:
+                try:
+                    text = p.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    text = None
+                if text is not None and find_secret_values(text, env):
+                    return None
             return make_ref(kind, p, provisional=not final)
         if p.exists():
             return make_ref(kind, p, provisional=True)
@@ -417,7 +432,7 @@ def _ref(kind: str, loc, *, final: bool = True) -> dict | None:
     return None
 
 
-def _execution(store: Store, inv: dict) -> dict:
+def _execution(store: Store, inv: dict, *, env: Mapping[str, str] | None = None) -> dict:
     from .recovery import lifecycle
     terminal = inv["state"] in ("completed", "failed", "cancelled", "rejected",
                                 "not_launched")
@@ -427,7 +442,11 @@ def _execution(store: Store, inv: dict) -> dict:
     diags, seen = [], set()
     logs = ((inv.get("launch") or {}).get("logs") or {})
     for name, loc in sorted(logs.items()):
-        r = _ref(f"{name}-log", loc, final=terminal)
+        # The launch logs are the engine's raw stdout/stderr: guard them against
+        # the caller's secret values (a log written before the supervisor's
+        # exit-time redaction, or by an older supervisor, is refused as
+        # evidence rather than digested — see _ref).
+        r = _ref(f"{name}-log", loc, final=terminal, env=env)
         if r:
             diags.append(r)
             seen.add(r["location"])
@@ -572,12 +591,12 @@ def build(store: Store, inv_id: str, *, env: Mapping[str, str] | None = None,
         raise ResultError(f"invocation {inv_id} is {inv['state']}, not terminal; run "
                           "`status` until it is (a result never waits or reruns)")
     rec = store.get_preparation(inv["prep_id"])["record"]
-    execution = _execution(store, inv)
+    execution = _execution(store, inv, env=env)
     if outcome is not None:     # refuse a bad --outcome before collecting anything
         _outcome(Normalized("collected", explanation=""), execution, rec, outcome)
     col, norm = _collect(store, inv_id, env, study)
     inv = store.get_invocation(inv_id)
-    execution = _execution(store, inv)
+    execution = _execution(store, inv, env=env)
     oc = _outcome(norm, execution, rec, outcome)
     n = 1 + sum(1 for e in store.list_events(entity_id=inv_id) if e["event"] == EV_RESULT)
     if study is None:
