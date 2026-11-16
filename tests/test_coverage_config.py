@@ -6,8 +6,9 @@ what both gates see. These tests pin that contract:
 
   * branch collection is on — a guard whose other outcome never runs still
     counts its body as covered by statement alone (at main 8d40c69 the suite
-    read 94% statement but 89% branch: 273 of 2548 arcs never taken, including
-    five in doctor.py while it read 100% by statement);
+    read 94% statement but 91.5% branch: 217 of 2548 arcs never taken,
+    including four in doctor.py — lines 119/153/277/352 — while it read 100%
+    by statement);
   * the source scope covers both Python roots (issue #10: a file outside
     `source` is invisible to every floor);
   * the subprocess/_exit patches and `parallel` are what make env-scrubbed
@@ -62,7 +63,7 @@ class SharedMeasurementContract(unittest.TestCase):
         # Statement-only coverage counts a guard's body as covered even when
         # its other outcome never runs. Without `branch = true` the metric
         # cannot see that class at all (doctor.py read 100% by statement
-        # with five never-taken arcs at main 8d40c69).
+        # with four never-taken arcs at main 8d40c69: lines 119/153/277/352).
         self.assertTrue(self.cp.getboolean("run", "branch", fallback=False),
                         ".coveragerc [run] must set branch = true")
 
@@ -102,7 +103,7 @@ class BranchDataReachesTheGate(unittest.TestCase):
             # guarded.py: every statement executes, but the loop always leaves
             # through `break` — the loop-exhaustion arc (for -> return) never
             # runs. Statement-only data calls the file 100%; branch data must
-            # not. This is the exact shape that hid five never-taken arcs in
+            # not. This is the exact shape that hid four never-taken arcs in
             # doctor.py while it read 100% by statement at main 8d40c69.
             (d / "guarded.py").write_text(
                 "def f(xs):\n"
