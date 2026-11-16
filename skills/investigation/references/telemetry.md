@@ -16,14 +16,14 @@ Pick one per study in `plan.md`.
 | Source | How |
 |---|---|
 | `port-forward` | `--port-forward CTX/NS/SVC[:PORT]`. The script picks a free local port, runs `kubectl --context CTX -n NS port-forward svc/SVC LOCAL:PORT` (remote port defaults to 9090), waits until the port accepts connections (up to `$INVESTIGATION_PF_TIMEOUT`, default 20 s), queries `127.0.0.1`, and terminates the process group in `finally` (SIGTERM, then SIGKILL). |
-| `url` | `--url URL [--token-env VAR]`: a reachable Prometheus or Thanos base URL. The bearer token is read **only** from the env var whose *name* is given. It is never printed, never written, and redacted from every error message. A URL that carries credentials, a query string or a fragment is refused. |
+| `url` | `--url URL [--token-env VAR]`: a reachable Prometheus or Thanos base URL. The bearer token is read **only** from the env var whose *name* is given. It is never printed, never written, and redacted from every error message. A URL that carries credentials, a query string or a fragment is refused. A plain-http URL to a non-loopback host is refused (the token would travel in cleartext); loopback http is fine, and `--allow-insecure-http` acknowledges the risk and overrides the refusal. |
 | `import` | No script. Copy an existing directory in the format `signal-pipeline` accepts into `telemetry/<id>/` as-is: raw files (`metrics.jsonl`, `vllm_server.log`, …), a pre-cooked `01_signals.json`, or sim2real's `metrics/raw/*_metrics.log` dumps. Write a `capture.json` by hand with `source.kind: "import"` and the origin path, and fill `files` with sha256 of what you copied. |
 
 ## Command
 
 ```
 scripts/capture_prom.py --study investigations/<slug> --capture-id <id>
-    (--url URL [--token-env VAR] | --port-forward CTX/NS/SVC[:PORT])
+    (--url URL [--token-env VAR] [--allow-insecure-http] | --port-forward CTX/NS/SVC[:PORT])
     --start <rfc3339> --end <rfc3339> [--step 30s]
     [--queries FILE] [--extra-queries FILE]
 ```
@@ -41,7 +41,14 @@ scripts/capture_prom.py --study investigations/<slug> --capture-id <id>
 - Exit codes:
   - `0`: captured. Some queries may be empty or failed; those are recorded.
   - `1`: every query failed (nothing is written), or the port-forward failed.
-  - `2`: bad arguments, including the step limit.
+  - `2`: bad arguments, including the step limit; also the cleartext-http
+    refusal (`--url` with plain `http` to a non-loopback host without
+    `--allow-insecure-http`).
+
+Each `query_range` request gets 60 s (`$INVESTIGATION_PROM_TIMEOUT` to
+override; a slow Thanos frontend may need more). The port-forward readiness
+wait is 20 s (`$INVESTIGATION_PF_TIMEOUT`), and the per-capture size guard
+is 50 MiB (`$INVESTIGATION_SIZE_GUARD_BYTES`, see "Size guard" below).
 
 ## Choosing the window
 
