@@ -545,6 +545,47 @@ class EngineNativeRedaction(unittest.TestCase):
         self.assertIs(native["evidence"][0]["ok"], True)
         self.assertEqual(native["evidence"][0]["count"], 1)
 
+    def test_unscrubbable_shape_drops_the_native_detail(self):
+        # The fallback arm (recovery.py:212): a secret-bearing shape scrub()
+        # cannot make secret-free. scrub() replaces offending strings and
+        # numbers, but its fall-through returns any OTHER object unchanged —
+        # a non-string, non-number dict key (a tuple) whose str() quotes the
+        # token survives scrub as a key, find_secret_values(out) still sees
+        # it (the walk str()s keys), and the fallback replaces the whole
+        # native detail with the marker rather than let the store's guard
+        # wedge the transition. Without the arm, reconcile raises StoreError
+        # on the transition (the tuple key can never serialize) and the run
+        # stays `running` forever — the same wedge the string/numeric fixes
+        # closed, one shape further out.
+        env = {**self.env, "FAKE_API_TOKEN": SECRET}
+        self.adapter.classify = lambda invocation, record, ctx: NativeState(
+            "failed", "halt", partial=True, reason="engine log: manifest truncated",
+            evidence=[{(SECRET,): "v"}])    # tuple key quoting the token
+        inv_id = self._running_invocation()
+        out = R.reconcile(self.store, inv_id, env=env)       # no StoreError
+        self.assertEqual(out["state"], "failed")             # terminal, not stuck
+        native = json.loads(self._native_json())
+        self.assertEqual(native["reason"], R.REDACTED_MARKER)
+        self.assertEqual(native["evidence"], [])             # detail dropped whole
+        self.assertIs(native["partial"], True)               # the facts survive
+        self.assertIn("classification redacted: 1 finding(s)", native["warnings"][0])
+        self.assertNotIn(SECRET, self._state_failed_event())
+        self.assertNotIn(SECRET, self._native_json())
+
+    def test_unscrubbable_shape_cancel_completes(self):
+        # The wedge face: cancel reconciles first; on the un-scrubbable shape
+        # it must complete (state failed), not die on the same StoreError —
+        # parity with test_numeric_secret_cancel_on_wedged_shape_completes.
+        env = {**self.env, "FAKE_API_TOKEN": SECRET}
+        self.adapter.classify = lambda invocation, record, ctx: NativeState(
+            "failed", "halt", partial=True, reason="engine log: manifest truncated",
+            evidence=[{(SECRET,): "v"}])
+        inv_id = self._running_invocation()
+        out = R.cancel(self.store, inv_id, reason="owner wants out", env=env)
+        self.assertEqual(out["state"], "failed")
+        for e in self.store.list_events(entity_id=inv_id):
+            self.assertNotIn(SECRET, e["detail_json"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -252,6 +252,122 @@ class ReconcileGuards(Base):
         self.assertEqual(v["lifecycle"], "completed")
         self.assertIsNone(v["native"])
 
+    def test_reserved_that_became_spawning_during_reconcile_is_not_recovery_required(self):
+        # The re-read guard's False arc (recovery.py:238->245): reserved, no
+        # live launcher, and by the time reconcile re-reads the row the
+        # supervisor has already moved it to spawning. The transition to
+        # RECOVERY_REQUIRED must NOT fire — the launch may be in flight —
+        # so the row keeps its true state and no recovery event is written.
+        # (The RUNNING analogue above covers the terminal flip; this is the
+        # reserved/spawning one, where a false positive would abandon a
+        # launch that is actually proceeding.)
+        prep, inv_id = self.reserved()
+        self.store.transition(inv_id, ("reserved",), SV.SPAWNING,
+                              supervisor_pid=999999, supervisor_start="1")
+        real_get = self.store.get_invocation
+        calls = {"n": 0}
+
+        def flip_after_first(inv_id_):
+            inv = real_get(inv_id_)
+            calls["n"] += 1
+            if inv and calls["n"] > 1 and inv["state"] == SV.SPAWNING:
+                reserved = dict(inv)
+                reserved["state"] = SV.RESERVED   # the first read's view
+                return reserved
+            return inv
+
+        with mock.patch.object(self.store, "get_invocation",
+                               side_effect=flip_after_first):
+            v = R.reconcile(self.store, inv_id, env=self.env)
+        # The re-read saw spawning (not reserved), so no transition fired:
+        # the row is still spawning, never recovery_required.
+        self.assertEqual(self.store.get_invocation(inv_id)["state"], "spawning")
+        self.assertNotEqual(v["lifecycle"], "recovery_required")
+        self.assertFalse([e for e in self.store.list_events(entity_id=inv_id)
+                          if e["event"] == "state:recovery_required"])
+
+    def test_running_that_became_cancelled_during_reconcile_keeps_its_state(self):
+        # The other False arc (recovery.py:253->257): RUNNING, both engine
+        # and supervisor gone, and the re-read row is neither RUNNING nor
+        # EXITED — here cancelled, recorded by a concurrent cancel path.
+        # reconcile must return the view without classifying (no native
+        # classification over a run its own record says was cancelled) and
+        # without the "exit code unknown" note, which belongs to the still-
+        # RUNNING case only.
+        prep, inv_id = self.reserved()
+        self.store.transition(inv_id, ("reserved",), SV.RUNNING,
+                              engine_pid=999999, engine_start="1")
+        self.store.request_cancel(inv_id, {"reason": "owner"}, env=self.env)
+        self.store.transition(inv_id, ("running",), SV.CANCELLED, exit_code=0,
+                              ended_at="2026-11-16T00:00:00Z", env=self.env)
+        real_get = self.store.get_invocation
+        calls = {"n": 0}
+
+        def flip_after_first(inv_id_):
+            inv = real_get(inv_id_)
+            calls["n"] += 1
+            if inv and calls["n"] > 1 and inv["state"] == SV.CANCELLED:
+                return inv                      # the re-read: cancelled
+            if inv and inv["state"] == SV.CANCELLED:
+                running = dict(inv)
+                running["state"] = SV.RUNNING   # the first read's view
+                return running
+            return inv
+
+        with mock.patch.object(self.store, "get_invocation",
+                               side_effect=flip_after_first), \
+             mock.patch.object(R, "_classify",
+                               side_effect=AssertionError("classified a run the "
+                                                          "re-read says is cancelled")) \
+             as classify:
+            v = R.reconcile(self.store, inv_id, env=self.env)
+        classify.assert_not_called()
+        self.assertEqual(v["state"], "cancelled")
+        self.assertEqual(v["lifecycle"], "cancelled")
+        # No classification ran (the row already carries a terminal state),
+        # and the both-gone note never fired.
+        self.assertIsNone(v["native"])
+        self.assertFalse(any("exit code unknown" in n for n in v["notes"]))
+
+    def test_running_that_became_exited_during_reconcile_still_classifies(self):
+        # The elif's False arc (recovery.py:253->257): RUNNING, both engine
+        # and supervisor gone, and the re-read row says the supervisor
+        # already recorded the exit (EXITED). Unlike the cancelled case
+        # above, reconcile must PROCEED: exited is exactly the state the
+        # classification path is for, so the native classification runs and
+        # the terminal state lands. (Entering reconcile with s == EXITED
+        # from the start skips this branch entirely; only the two-read race
+        # reaches the elif's False arm.)
+        prep, inv_id = self.reserved()
+        self.store.transition(inv_id, ("reserved",), SV.RUNNING,
+                              engine_pid=999999, engine_start="1")
+        # The supervisor records the exit between reconcile's two reads.
+        self.store.transition(inv_id, ("running",), SV.EXITED, exit_code=0,
+                              env=self.env)
+        real_get = self.store.get_invocation
+        calls = {"n": 0}
+
+        def flip_after_first(inv_id_):
+            inv = real_get(inv_id_)
+            calls["n"] += 1
+            if inv and calls["n"] > 1 and inv["state"] == SV.EXITED:
+                return inv                      # the re-read: exited
+            if inv and inv["state"] == SV.EXITED:
+                running = dict(inv)
+                running["state"] = SV.RUNNING   # the first read's view
+                return running
+            return inv
+
+        with mock.patch.object(self.store, "get_invocation",
+                               side_effect=flip_after_first):
+            v = R.reconcile(self.store, inv_id, env=self.env)
+        # Classification ran and produced the terminal state (the fake
+        # adapter's default engine classification). The both-gone note does
+        # NOT fire: it belongs to a re-read that is still RUNNING.
+        self.assertEqual(v["state"], "failed")
+        self.assertEqual(v["native"]["state"], "failed")
+        self.assertFalse(any("exit code unknown" in n for n in v["notes"]))
+
     def test_engine_gone_supervisor_alive_stays_running(self):
         # RUNNING, engine gone, supervisor still alive: the supervisor will
         # record the exit, so reconcile leaves the state alone.
