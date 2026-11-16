@@ -169,8 +169,17 @@ class ScrubbedEnvForwardsCoverageKeys(unittest.TestCase):
         # COVERAGE_* in the env — the import below would report
         # ModuleNotFoundError as an ERROR instead of a skip (same guard
         # shape as tests/test_check_coverage_floor.py's HAVE_COVERAGE).
-        if not _under_coverage():
-            self.skipTest("suite not running under coverage")
+        # The gate here is START specifically, not the _under_coverage()
+        # disjunction the forwarding halves use: a plain `coverage run`
+        # (nothing exported) sets only COVERAGE_RUN and
+        # COVERAGE_PROCESS_CONFIG, while the assertion below requires
+        # COVERAGE_PROCESS_START — the CI/ci-local unit shape (both export
+        # it before `coverage run`) — so this half skips everywhere the
+        # child contract it pins is not actually in force.
+        if not os.environ.get("COVERAGE_PROCESS_START"):
+            self.skipTest("no COVERAGE_PROCESS_START in the parent env: the "
+                          "child-measurement contract is only pinned in the "
+                          "CI unit shape, which exports it before coverage run")
         import coverage  # the suite is measured, so this import exists
         site_dir = os.path.dirname(os.path.dirname(coverage.__file__))
         for module_name in ("tests.test_runtime_recovery",
