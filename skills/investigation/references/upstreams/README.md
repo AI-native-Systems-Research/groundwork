@@ -33,6 +33,10 @@ runtime refuses to load it and the tests fail until it's re-verified.
 
 ## Bumping an upstream
 
+Run these commands from the skill folder (`skills/investigation/`), or use the
+full path `skills/investigation/scripts/verify_upstreams.py` from anywhere in
+the repo.
+
 1. Install or build the new version.
 2. Edit its entry in `lock.json`. For a new BLIS build, add it under
    `binaries` with its sha256, source commit, router and patches.
