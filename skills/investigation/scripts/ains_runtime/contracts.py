@@ -36,9 +36,12 @@ from .artifacts import validate_artifact_ref
 from .envpolicy import find_secret_values
 
 # references/upstreams/ is the only home of upstream facts; the adapters do
-# the same (adapters/nous.py). scripts/ is on sys.path in every entry point
-# that imports this package (runtime.py, the tests, the install smoke).
-_SCRIPTS = Path(__file__).resolve().parent.parent.parent
+# the same (adapters/nous.py). The guard is load-bearing for any process
+# that resolves ains_runtime without scripts/ on sys.path (a site-packages
+# install, a symlinked site dir, an editable install): contracts.py sits one
+# level shallower than the adapters, so scripts/ is two hops up from here
+# (cli.py / gitstate.py use the same count; the adapters need three).
+_SCRIPTS = Path(__file__).resolve().parent.parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
