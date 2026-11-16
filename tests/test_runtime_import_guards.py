@@ -39,6 +39,27 @@ from _runtime_util import SCRIPTS  # noqa: E402
 
 PKG = SCRIPTS / "ains_runtime"
 
+
+def _module_level_sibling_imports(rel: str) -> set:
+    """scripts/ siblings that module `rel` (under SCRIPTS) imports at
+    module level. Empty for a module that is absent or imports none — the
+    same AST fact GuardInventory pins, so the registration below and the
+    inventory test can never disagree about what the tree contains.
+    """
+    p = SCRIPTS / rel
+    if not p.is_file():
+        return set()
+    siblings = {q.stem for q in SCRIPTS.glob("*.py")}
+    tree = ast.parse(p.read_text(encoding="utf-8"))
+    imported = set()
+    for n in tree.body:                      # module level only
+        if isinstance(n, ast.Import):
+            imported |= {a.name.split(".")[0] for a in n.names}
+        elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
+            imported.add(n.module.split(".")[0])
+    return imported & siblings
+
+
 # Modules whose module-level body imports a scripts/ sibling through the
 # guard: (module, the sibling import that must resolve).
 GUARDED_IMPORTS = [
@@ -47,13 +68,23 @@ GUARDED_IMPORTS = [
     ("ains_runtime.gitstate", "_config"),
     ("ains_runtime.cli", "_config"),
 ]
+# PR #79 (task_types fact-sourcing) gives contracts.py a module-level
+# `import upstreams` behind its own guard; main's contracts.py restates the
+# tuple and imports no sibling. Registering the module only when the
+# sibling import is actually present keeps the pinned set exact against
+# both trees, so whichever of the two held PRs lands first needs no rebase
+# of this file (at main the entry is simply absent, as before).
+if _module_level_sibling_imports("ains_runtime/contracts.py"):
+    GUARDED_IMPORTS.append(("ains_runtime.contracts", "upstreams"))
 # Also importable from outside (results.py's guard serves its deferred
 # sibling imports; the rest import cleanly through the package alone).
-FOREIGN_IMPORTABLE = [m for m, _ in GUARDED_IMPORTS] + [
+# contracts.py joins the GUARDED_IMPORTS head once its sibling import is
+# present; the order-stable dedup keeps it from being listed twice then.
+FOREIGN_IMPORTABLE = list(dict.fromkeys([m for m, _ in GUARDED_IMPORTS] + [
     "ains_runtime.results", "ains_runtime.preparation", "ains_runtime.supervisor",
     "ains_runtime.recovery", "ains_runtime.store", "ains_runtime.contracts",
     "ains_runtime.adapters", "ains_runtime.adapters.base",
-]
+]))
 
 
 def run_child(code: str, cwd: Path) -> subprocess.CompletedProcess:
