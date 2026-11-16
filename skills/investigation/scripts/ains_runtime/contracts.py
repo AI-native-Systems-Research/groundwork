@@ -27,11 +27,25 @@ Entry points:
 from __future__ import annotations
 
 import re
+import sys
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from . import SCHEMA_VERSIONS
 from .artifacts import validate_artifact_ref
 from .envpolicy import find_secret_values
+
+# references/upstreams/ is the only home of upstream facts; the adapters do
+# the same (adapters/nous.py). The guard is load-bearing for any process
+# that resolves ains_runtime without scripts/ on sys.path (a site-packages
+# install, a symlinked site dir, an editable install): contracts.py sits one
+# level shallower than the adapters, so scripts/ is two hops up from here
+# (cli.py / gitstate.py use the same count; the adapters need three).
+_SCRIPTS = Path(__file__).resolve().parent.parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+
+import upstreams as U  # noqa: E402  (references/upstreams/: the only home of upstream facts)
 
 SCHEMA_RE = re.compile(r"^ains\.([a-z][a-z-]*)/v([0-9]+)$")
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -45,7 +59,9 @@ ENVELOPE_OPTIONAL = ("reply_to",)
 
 CAPABILITIES = ("nous", "spotlights-static", "spotlights-telemetry",
                 "telemetry-capture")
-TASK_TYPES = ("debug", "verify", "optimize", "policy", "explain", "other")
+# The Nous v2 task_type enum, fact-sourced (references/upstreams/nous.json)
+# so a lock bump that changes it fails here instead of drifting silently.
+TASK_TYPES = tuple(U.fact("nous", "task_types"))
 
 # Lifecycle states reported to the coordinator (spec §8, plan §4.3/§4.4).
 LIFECYCLE_STATES = ("accepted", "running", "waiting_for_answer", "completed",

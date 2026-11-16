@@ -756,6 +756,35 @@ class Registry(unittest.TestCase):
     def test_shipped_nous_adapter_registered(self):
         self.assertIsInstance(A.get("nous"), N.NousAdapter)
 
+    def test_register_refuses_non_adapter(self):
+        with self.assertRaises(TypeError) as cm:
+            A.register("not an adapter")
+        self.assertEqual(str(cm.exception), "not an Adapter")
+        # the registry is untouched
+        self.assertIsInstance(A.get("nous"), N.NousAdapter)
+
+    def test_register_refuses_adapter_without_capability_or_version(self):
+        class NoMeta(N.NousAdapter):
+            capability = ""
+            version = ""
+        with self.assertRaises(ValueError) as cm:
+            A.register(NoMeta())
+        self.assertEqual(str(cm.exception), "adapter needs capability and version")
+
+    def test_register_refuses_duplicate_without_replace(self):
+        class Stub(N.NousAdapter):
+            version = "stub-0"
+            def validate(self, request, ctx): return []
+            def versions(self, ctx): return {}
+        try:
+            A.register(Stub())
+        except A.AdapterError as e:
+            self.assertIn("already registered", str(e))
+        else:
+            self.fail("duplicate registration without replace=True must raise")
+        # the shipped adapter is still the one registered
+        self.assertIsInstance(A.get("nous"), N.NousAdapter)
+
     def test_default_probe_without_apparatus(self):
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp, True)

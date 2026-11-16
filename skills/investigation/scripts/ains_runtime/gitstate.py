@@ -23,9 +23,13 @@ _SCRIPTS = Path(__file__).resolve().parent.parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 import _config  # noqa: E402
+import upstreams as U  # noqa: E402  (references/upstreams/: the only home of upstream facts)
 
-# D4: the only paths a dirty target may have changes under.
-IGNORED_PATHS = ("investigations", ".nous-experiments")
+# D4: the only paths a dirty target may have changes under. The Nous
+# worktree dir is the nous.json worktree_dir fact — the same value
+# adapters/nous.py sources — so a Nous bump renaming it changes the
+# exclusion with the adapter, not apart from it.
+IGNORED_PATHS = ("investigations", U.fact("nous", "worktree_dir"))
 DIRTY_SAMPLE = 20
 
 

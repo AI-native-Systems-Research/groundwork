@@ -87,26 +87,22 @@ itself, so give it `--run-dir "$RUNS/spotlights-<id>/artifacts"` and
 
 ### Metrics-only caveat (F1)
 
-Our captures are metrics only. Stage 01
-(`src/spotlights_engine/signal_pipeline/stages/s01_signal_extraction.py`)
-accepts a `--telemetry-from` directory only in two forms:
-
-- a pre-cooked Signals JSON in it (`01_signals.json`, `signals.json` or
-  `signal.json`; `_DIR_CANDIDATES`, line 45), or
-- a raw-OTel directory, which it recognises **only** by `traces.jsonl`
-  (`_OTEL_DISCRIMINATOR = "traces.jsonl"`, line 50; the dispatch in `run()`,
-  line 207, calls the agent extraction only when `_has_otel_discriminator`).
+Our captures are metrics only. Stage 01 accepts a `--telemetry-from`
+directory only in the two forms the `stage01_inputs` fact records
+(`upstreams/spotlights.json`; sources cited there): a pre-cooked Signals
+JSON, or a raw-OTel directory recognised **only** by `traces.jsonl`.
 
 A directory with just `metrics.jsonl` + `prom/` matches neither, so
-`_resolve_signals_file` raises `FileNotFoundError` (lines 93–108). The skill
-does **not** work around this: it never writes `01_signals.json` and never
-fakes a `traces.jsonl`; anomaly detection is spotlights' job. Until spotlights
-accepts a metrics-only directory, doctor reports `spotlights-telemetry` as
-unavailable for metrics-only captures, and `plan.md` says so. Even once it
-works, expect fewer, coarser candidates (pod/metric level, not function level)
-than the trace-based canonical runs; static Spotlights on the module the
-metrics point at fills that gap. (Owner action, still open: raise the gap with
-spotlights.)
+`_resolve_signals_file` raises `FileNotFoundError`. The skill does
+**not** work around this: it never writes a pre-cooked Signals JSON and
+never fakes a `traces.jsonl`; anomaly detection is spotlights' job.
+Until spotlights accepts a metrics-only directory, doctor reports
+`spotlights-telemetry` as unavailable for metrics-only captures (its
+reason string is built from the same fact), and `plan.md` says so. Even
+once it works, expect fewer, coarser candidates (pod/metric level, not
+function level) than the trace-based canonical runs; static Spotlights
+on the module the metrics point at fills that gap. (Owner action,
+still open: raise the gap with spotlights.)
 
 ## Collect (step 5)
 

@@ -5,12 +5,18 @@ holds only `git`. new_study always calls doctor offline, so nothing touches
 the network.
 """
 import os
+import pty
+import select
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _cov_child_env import covsite_env  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "skills/investigation/scripts" / "new_study.py"
@@ -51,7 +57,8 @@ class NewStudyBase(unittest.TestCase):
                     "INVESTIGATION_RUNS": str(self.tmp / "runs"),
                     "GIT_CONFIG_NOSYSTEM": "1", "LANG": "C.UTF-8",
                     **{k: v for k, v in os.environ.items()
-                     if k.startswith("COVERAGE_")}}
+                     if k.startswith("COVERAGE_")},
+                    **covsite_env()}
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -59,6 +66,66 @@ class NewStudyBase(unittest.TestCase):
     def run_ns(self, cwd, *args):
         return subprocess.run([sys.executable, str(SCRIPT), *args], cwd=cwd, env=self.env,
                               stdin=subprocess.DEVNULL, capture_output=True, text=True)
+
+    def run_ns_tty(self, cwd, *args, feed: bytes, timeout: float = 30.0):
+        """Run new_study with stdin a real TTY and `feed` typed into it.
+
+        ask_tracking() only runs when sys.stdin.isatty(); run_ns always pipes
+        DEVNULL, so the interactive first-study prompt is unreachable there.
+        A pty pair gives the child a TTY and us a master to write keystrokes
+        to. Output is combined (the prompt is printed to stderr, the result
+        to stdout) because both share the terminal in a real session too.
+        """
+        # Both stdout and stderr go to the pty, like a real terminal session:
+        # the prompt (stderr) then has to appear on the master before we answer.
+        master, slave = pty.openpty()
+        try:
+            p = subprocess.Popen([sys.executable, str(SCRIPT), *args], cwd=cwd,
+                                 env=self.env, stdin=slave, stdout=slave,
+                                 stderr=slave)
+        finally:
+            os.close(slave)
+        chunks = []
+
+        def drain(what: bytes | None):
+            if what:
+                chunks.append(what)
+            return b"tracking [fork/untracked]" in b"".join(chunks)
+
+        # Answer once the prompt reaches the terminal (the child is blocked on
+        # readline; waiting for its exit would always burn the full timeout).
+        # Reading past the child's exit raises EIO — the session is over.
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and p.poll() is None:
+            ready, _, _ = select.select([master], [], [], 0.05)
+            if ready:
+                try:
+                    if drain(os.read(master, 4096)):
+                        break
+                except OSError:
+                    break
+        if p.poll() is None:
+            os.write(master, feed)
+        while time.monotonic() < deadline and p.poll() is None:
+            ready, _, _ = select.select([master], [], [], 0.05)
+            if ready:
+                try:
+                    drain(os.read(master, 4096))
+                except OSError:
+                    break
+        if p.poll() is None:  # still blocked on the prompt: end the session
+            try:
+                os.close(master)
+            except OSError:
+                pass
+            p.kill()
+        p.wait(timeout=timeout)
+        try:
+            os.close(master)
+        except OSError:
+            pass
+        out = b"".join(chunks).decode("utf-8", "replace")
+        return p.returncode, out
 
     def fork_repo(self):
         return make_repo(self.tmp / "router", {"origin": "git@github.com:me/router.git",
@@ -148,6 +215,121 @@ class TestScaffold(NewStudyBase):
         r = self.run_ns(repo, "--slug", "a", "--tracking", "fork")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("commit guard will refuse", r.stdout)
+
+    def test_usage_error_when_no_slug_and_no_commit_guard(self):
+        # main()'s argparse guard: neither --slug nor --commit-guard is a usage
+        # error (exit 2, argparse's message on stderr), not a traceback.
+        repo = self.fork_repo()
+        r = self.run_ns(repo)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("--slug is required", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_excludes_existing_content_without_trailing_newline(self):
+        # add_exclude() normalizes a .git/info/exclude that lacks a trailing
+        # newline: the previous last line must stay intact and whole, and
+        # exactly one investigations/ line is appended.
+        repo = self.fork_repo()
+        exclude = repo / ".git/info/exclude"
+        exclude.write_text("# no trailing newline comment")
+        r = self.run_ns(repo, "--slug", "a", "--tracking", "untracked")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        lines = exclude.read_text().splitlines()
+        self.assertEqual(lines[0], "# no trailing newline comment")
+        self.assertEqual(lines.count("investigations/"), 1)
+        self.assertTrue(exclude.read_text().endswith("investigations/\n"))
+
+    def test_second_untracked_study_readds_missing_exclude_and_notes_it(self):
+        # The repo config already says untracked but the exclude line was
+        # removed: ensure_repo_config re-adds it and says so in the notes.
+        repo = self.fork_repo()
+        self.assertEqual(self.run_ns(repo, "--slug", "a", "--tracking",
+                                     "untracked").returncode, 0)
+        exclude = repo / ".git/info/exclude"
+        exclude.write_text("# removed the line\n")
+        r = self.run_ns(repo, "--slug", "b")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"added investigations/ to {exclude}", r.stdout)
+        self.assertEqual(exclude.read_text().splitlines().count("investigations/"), 1)
+
+    def test_first_study_notes_undeterminable_upstream(self):
+        # Two remotes, neither named upstream, no repo config yet: doctor
+        # cannot tell which is upstream, so the freshly written config gets
+        # upstream_remote: upstream as a guess plus a note telling the owner
+        # to set it by hand before committing.
+        repo = make_repo(self.tmp / "router", {
+            "origin": "git@github.com:org/router.git",
+            "other": "git@github.com:org/router-mirror.git"})
+        r = self.run_ns(repo, "--slug", "a", "--tracking", "fork")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("upstream remote could not be determined", r.stdout)
+        self.assertIn("set upstream_remote in", r.stdout)
+        cfgp = repo / "investigations/config.yaml"
+        self.assertEqual(yaml.safe_load(cfgp.read_text())["upstream_remote"], "upstream")
+
+    def test_engine_rows_render_rich_versions_in_question_md(self):
+        # A configured engine checkout (machine config engines.nous) gives
+        # engine_rows() a found engine with version, sha, ref and pin, plus
+        # the unpushed-HEAD warning: the markdown table a real question.md
+        # ships with, not just "not found" rows.
+        eng = make_repo(self.tmp / "eng", {"origin": "git@x:org/eng.git"})
+        sh("git", "tag", "v1.2.3", cwd=eng)
+        self.cfg.mkdir(parents=True, exist_ok=True)
+        (self.cfg / "config.yaml").write_text(f"engines:\n  nous: {eng}\n")
+        repo = self.fork_repo()
+        r = self.run_ns(repo, "--slug", "a", "--tracking", "fork")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        q = (repo / "investigations/a/question.md").read_text()
+        row = next(line for line in q.splitlines() if "Engine `nous`" in line)
+        self.assertIn("v1.2.3 @ ", row)
+        self.assertIn("(main) via config", row)
+        self.assertIn("; pin nous-v2-fixes@e224cc1", row)
+        self.assertIn("WARN: ", row)
+        self.assertIn("not found", next(line for line in q.splitlines()
+                                        if "Engine `sim2real`" in line))
+
+
+class TestInteractiveTracking(NewStudyBase):
+    """The first-study prompt: only reachable when stdin is a TTY."""
+
+    def test_prompt_asks_and_takes_untracked(self):
+        repo = self.fork_repo()
+        rc, out = self.run_ns_tty(repo, "--slug", "a", feed=b"untracked\n")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("choose a tracking mode", out)
+        self.assertIn("remotes: origin=", out)
+        self.assertIn("upstream: upstream; push remote: origin", out)
+        self.assertIn("tracking: untracked", out)
+        # The choice is what lands on disk, not the fork default.
+        self.assertFalse((repo / "investigations/config.yaml").exists())
+        cfg = yaml.safe_load((self.cfg / "repos/router.yaml").read_text())
+        self.assertEqual(cfg["tracking"], "untracked")
+        self.assertEqual((repo / ".git/info/exclude").read_text()
+                         .splitlines().count("investigations/"), 1)
+
+    def test_empty_answer_defaults_to_fork(self):
+        repo = self.fork_repo()
+        rc, out = self.run_ns_tty(repo, "--slug", "a", feed=b"\n")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("tracking: fork", out)
+        cfg = yaml.safe_load((repo / "investigations/config.yaml").read_text())
+        self.assertEqual(cfg["tracking"], "fork")
+        # fork mode never touches .git/info/exclude
+        self.assertFalse((repo / ".git/info/exclude").read_text()
+                         .splitlines().count("investigations/"))
+
+    def test_eof_at_the_prompt_is_a_clean_refusal(self):
+        # Ctrl-D at the prompt: readline returns "" and ask_tracking raises
+        # StudyError, which main() turns into exit 2 with a message — not a
+        # traceback and not a silent default.
+        repo = self.fork_repo()
+        rc, out = self.run_ns_tty(repo, "--slug", "a", feed=b"\x04")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("no tracking mode given", out)
+        self.assertNotIn("Traceback", out)
+        # Nothing was scaffolded and no config was written.
+        self.assertFalse((repo / "investigations").exists())
+        self.assertFalse((self.cfg / "repos/router.yaml").exists())
 
 
 class TestCommitGuard(NewStudyBase):

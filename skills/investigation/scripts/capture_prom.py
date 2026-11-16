@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import http.client
 import ipaddress
 import json
 import math
@@ -254,10 +255,23 @@ def query_range(base: str, token: str | None, promql: str, start: dt.datetime,
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
             raw = r.read()
+    except http.client.HTTPException as e:
+        # A 200 answered but the body never arrived in full: urllib raises
+        # IncompleteRead out of r.read() (an HTTPException, not an OSError),
+        # which the URLError/OSError branch below does not match. Same
+        # classification as any other transport failure.
+        return None, None, redact(f"request failed: {type(e).__name__}: {e}")
     except urllib.error.HTTPError as e:
         # Prometheus answers bad queries with 400/422 and a JSON error body.
-        raw = e.read() or b""
         http_err = f"HTTP {e.code}"
+        try:
+            raw = e.read() or b""
+        except (OSError, http.client.HTTPException) as e2:
+            # The body is transport I/O too: a server (or proxy) that answers a
+            # status then resets or drops the connection fails the read. Treat
+            # that as this query's request failure, not a CLI crash.
+            return None, None, redact(
+                f"{http_err} (body read failed: {type(e2).__name__})")
         try:
             doc = json.loads(raw)
         except ValueError:

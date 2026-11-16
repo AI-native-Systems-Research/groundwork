@@ -362,7 +362,17 @@ def collect(study: Path, run_dir: Path, top: int, repo: Path, sha_override) -> d
                          "(fetch it, or pass --repo for the target checkout)")
         else:
             full_sha = resolved.decode().strip()
-    source_root = ((report.get("project_tree") or {}).get("repository") or {}).get("source_root")
+    # project_tree.repository comes from the engine's own JSON (nothing
+    # validates it between the file read and here), so every .get hop is
+    # guarded: a non-mapping shape (a list, a string) means no source_root —
+    # the existing None path, whose alternate-path retry then simply never
+    # fires — not a crash. The isinstance-before-.get shape is the one
+    # spotlights_static.py already uses around its report extraction.
+    tree = report.get("project_tree") if isinstance(report.get("project_tree"), dict) else {}
+    repository = tree.get("repository") if isinstance(tree.get("repository"), dict) else {}
+    source_root = repository.get("source_root")
+    if not isinstance(source_root, str):
+        source_root = None
     if full_sha:
         cdir = study / "citations"
         for rank, cid in enumerate(order[:max(top, 0)], start=1):
@@ -379,7 +389,15 @@ def collect(study: Path, run_dir: Path, top: int, repo: Path, sha_override) -> d
             if lines is None:
                 notes.append(f"{cid}: {path} not found at {repo_label}@{full_sha[:8]}")
                 continue
-            start, end = int(span["line_start"]), int(span["line_end"])
+            try:
+                start, end = int(span["line_start"]), int(span["line_end"])
+            except (ValueError, TypeError):
+                # engine-authored span lines in a non-int spelling ('L3',
+                # None, a float-bearing string) are a per-candidate skip,
+                # like the out-of-range tier below, never a whole-run crash.
+                notes.append(f"{cid}: span lines {span.get('line_start')!r}-{span.get('line_end')!r} "
+                             "not numeric; citation skipped")
+                continue
             if start < 1 or end < start or end > len(lines):
                 notes.append(f"{cid}: lines L{start}-L{end} out of range ({path} has "
                              f"{len(lines)} lines at {full_sha[:8]})")

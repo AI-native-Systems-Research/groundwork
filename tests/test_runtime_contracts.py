@@ -45,10 +45,14 @@ MALFORMED = [
     ("receipt", "no reply_to", lambda m: m.pop("reply_to")),
     ("receipt", "bad status", lambda m: m["body"].update(status="ok")),
     ("receipt", "conflict without reasons", lambda m: m["body"].update(status="conflict")),
+    ("receipt", "reasons item not text", lambda m: m["body"].update(reasons=[7])),
+    ("receipt", "reasons item blank", lambda m: m["body"].update(reasons=["  "])),
     ("receipt", "bad timestamp", lambda m: m["body"].update(received_at="yesterday")),
     ("progress", "bad state", lambda m: m["body"].update(state="done")),
     ("progress", "missing at", lambda m: m["body"].pop("at")),
     ("clarification", "bad kind", lambda m: m["body"].update(kind="note")),
+    ("clarification", "fields item not text", lambda m: m["body"].update(fields=[None])),
+    ("clarification", "fields item blank", lambda m: m["body"].update(fields=[""])),
     ("clarification", "answer without reply_to", lambda m: m["body"].update(kind="answer")),
     ("cancel", "missing reason", lambda m: m["body"].pop("reason")),
     ("cancel", "interrupt not bool", lambda m: m["body"].update(interrupt="yes")),
@@ -76,6 +80,10 @@ MALFORMED = [
         candidates=[{"id": "cand-x-0001", "estimated_impact": "high"}])),
     ("experiment-result", "bad classified_by", lambda m: m["body"]["outcome"].update(
         classified_by="agent")),
+    ("experiment-result", "spend reported_usd not a number", lambda m: m["body"]["spend"].update(
+        reported_usd="7.42")),
+    ("experiment-result", "spend reported_usd bool", lambda m: m["body"]["spend"].update(
+        reported_usd=True)),
 ]
 
 ENVELOPE_MALFORMED = [
@@ -93,6 +101,9 @@ ENVELOPE_MALFORMED = [
         {"kind": "log", "location": "/tmp/x", "provisional": False}])),
     ("body missing", lambda m: m.pop("body")),
     ("body not object", lambda m: m.update(body=[])),
+    ("artifact ref not an object", lambda m: m.update(artifacts=[["log"]])),
+    ("artifact ref blank location", lambda m: m.update(artifacts=[
+        {"kind": "log", "location": "  ", "provisional": True}])),
 ]
 
 
@@ -171,6 +182,28 @@ class ArtifactRefs(unittest.TestCase):
         self.assertEqual(identity(a), identity(b))
         with self.assertRaises(ValueError):
             identity(make_ref("x", "/log", provisional=True))
+
+    def test_non_object_ref_is_rejected(self):
+        self.assertEqual(validate_artifact_ref("log"), ["artifact: must be an object"])
+        self.assertEqual(validate_artifact_ref([["log"]]), ["artifact: must be an object"])
+
+    def test_blank_location_is_rejected(self):
+        errs = validate_artifact_ref({"kind": "log", "location": "  ", "provisional": True})
+        self.assertEqual(errs, ["artifact.location: required non-empty string"])
+        errs = validate_artifact_ref({"kind": "log", "location": 7, "provisional": True})
+        self.assertEqual(errs, ["artifact.location: required non-empty string"])
+
+    def test_make_ref_raises_on_invalid_built_ref(self):
+        # make_ref validates the ref it builds: a kind that cannot match KIND_RE
+        # (space) or an explicit non-sha256 digest must raise, not return a
+        # broken ref the store would later have to reject.
+        from ains_runtime.artifacts import make_ref
+        with self.assertRaises(ValueError) as cm:
+            make_ref("bad kind!", "/tmp/x.log", provisional=True)
+        self.assertIn("kind", str(cm.exception))
+        with self.assertRaises(ValueError) as cm:
+            make_ref("log", "/tmp/x.log", digest="md5:abc")
+        self.assertIn("digest", str(cm.exception))
 
 
 class SchemaDocs(unittest.TestCase):

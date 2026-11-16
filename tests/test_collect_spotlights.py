@@ -44,6 +44,157 @@ def snapshot(root: Path) -> dict:
             for p in root.rglob("*") if p.is_file()}
 
 
+class EngineShapeDriftTest(unittest.TestCase):
+    """Engine-authored result.json fields in a shape the collector doesn't
+    expect must degrade to a per-candidate note, never crash the run.
+
+    Nothing validates the engine's JSON between the file read and
+    collect()'s citation loop, so a shape drift escapes as a raw
+    ValueError/TypeError/AttributeError from main()'s own except clauses,
+    exits 1 and writes NO collection.json — the study is left with only
+    the partial spotlights/ copies, breaking the module docstring's
+    contract (lines 37-40: a candidate whose span can't be cited gives a
+    note and no claim; the run still collects). Each test corrupts one
+    field of the fixture copy in this file's toyrepo harness and pins the
+    four shapes the supervisor reproduced at main 8d40c69 (scanner bead
+    77d15bdc-637): span lines in a non-int spelling, and a non-mapping
+    project_tree / project_tree.repository. Every test asserts the full
+    degrade contract — exit 0, a note naming the candidate, and
+    collection.json written with the OTHER candidates' claims intact —
+    because a crash here loses the whole run's work, not one citation.
+    """
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        root = Path(self._td.name)
+        self.target = root / "toyrepo"
+        (self.target / "toy/cache").mkdir(parents=True)
+        (self.target / "toy/cache/constants.py").write_text(CONSTANTS)
+        (self.target / "toy/cache/policy.py").write_text(POLICY)
+        git(root, "init", "-q", str(self.target))
+        git(self.target, "add", ".")
+        git(self.target, "commit", "-qm", "c1")
+        self.sha = git(self.target, "rev-parse", "HEAD")
+        (self.target / "toy/cache/constants.py").write_text("# moved\n" + CONSTANTS)
+        git(self.target, "commit", "-qam", "c2")
+        self.study = self.target / "investigations" / "s1"
+        self.study.mkdir(parents=True)
+        self.run_dir = root / "runs" / "spotlights-a"
+        shutil.copytree(RUN, self.run_dir)
+        mp = self.run_dir / "run_manifest.json"
+        m = json.loads(mp.read_text())
+        m["target"]["commit_sha"] = self.sha
+        mp.write_text(json.dumps(m, indent=2))
+
+    def corrupt(self, fn):
+        """Apply fn(report-dict) to the fixture copy's result.json."""
+        rp = self.run_dir / "result.json"
+        r = json.loads(rp.read_text())
+        fn(r["report"])
+        rp.write_text(json.dumps(r))
+
+    def run_collect(self):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "--study", str(self.study),
+             "--run-dir", str(self.run_dir)],
+            capture_output=True, text=True)
+
+    def assert_degraded_to_a_note(self, r, cid, note_substr):
+        """The full degrade contract for one corrupted candidate: the run
+        collects (exit 0, no traceback), collection.json IS written, a note
+        names the candidate, and the OTHER candidates' claims are intact —
+        the run-a ranking cites 0002/0001/0003 when 0001 is untouched."""
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertTrue((self.study / "collection.json").is_file(),
+                        "collection.json must be written even when a "
+                        "candidate's engine-authored shape is hostile")
+        sec = json.loads((self.study / "collection.json").read_text())["spotlights"]
+        self.assertTrue(any(cid in n and note_substr in n for n in sec["notes"]),
+                        sec["notes"])
+        drafted = [c["candidate_id"] for c in sec["claims_draft"]]
+        self.assertIn("cand-toy_cache-0002", drafted)   # other claims intact
+        self.assertIn("cand-toy_cache-0003", drafted)
+        return sec
+
+    def test_span_line_start_spelled_l3_degrades_to_a_note(self):
+        """span.line_start='L3' (a string) crashed at main with ValueError:
+        invalid literal for int() with base 10: 'L3' (collect_spotlights.py
+        :360), exit 1, no collection.json."""
+        self.corrupt(lambda rep: rep["candidates"][0]["locations"][0]
+                     ["spans"][0].__setitem__("line_start", "L3"))
+        sec = self.assert_degraded_to_a_note(
+            self.run_collect(), "cand-toy_cache-0001", "not numeric")
+        self.assertNotIn("cand-toy_cache-0001",
+                         [c["candidate_id"] for c in sec["claims_draft"]])
+
+    def test_span_line_start_none_degrades_to_a_note(self):
+        """span.line_start=None crashed at main with TypeError: int()
+        argument must be a string... not 'NoneType' (:360), exit 1, no
+        collection.json."""
+        self.corrupt(lambda rep: rep["candidates"][0]["locations"][0]
+                     ["spans"][0].__setitem__("line_start", None))
+        sec = self.assert_degraded_to_a_note(
+            self.run_collect(), "cand-toy_cache-0001", "not numeric")
+        self.assertNotIn("cand-toy_cache-0001",
+                         [c["candidate_id"] for c in sec["claims_draft"]])
+
+    def test_project_tree_list_degrades_to_no_source_root(self):
+        """report.project_tree=['toy','cache'] crashed at main with
+        AttributeError: 'list' object has no attribute 'get' (:343), exit 1,
+        no collection.json. A non-mapping tree means no source_root — the
+        existing None path — and every candidate still cites normally."""
+        self.corrupt(lambda rep: rep.__setitem__("project_tree", ["toy", "cache"]))
+        r = self.run_collect()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        sec = json.loads((self.study / "collection.json").read_text())["spotlights"]
+        self.assertEqual([c["candidate_id"] for c in sec["claims_draft"]],
+                         ["cand-toy_cache-0002", "cand-toy_cache-0001",
+                          "cand-toy_cache-0003"])
+
+    def test_project_tree_repository_string_degrades_to_no_source_root(self):
+        """report.project_tree={'repository': '<url-string>'} crashed at main
+        with AttributeError: 'str' object has no attribute 'get' (:343),
+        exit 1, no collection.json."""
+        self.corrupt(lambda rep: rep.__setitem__(
+            "project_tree", {"repository": "https://example.com/toyrepo.git"}))
+        r = self.run_collect()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        sec = json.loads((self.study / "collection.json").read_text())["spotlights"]
+        self.assertEqual([c["candidate_id"] for c in sec["claims_draft"]],
+                         ["cand-toy_cache-0002", "cand-toy_cache-0001",
+                          "cand-toy_cache-0003"])
+
+    def test_source_root_non_string_is_treated_as_absent(self):
+        """A mapping tree whose repository.source_root is a non-string (a
+        list, the deepest hop of the :343 chain) reads as no source_root,
+        never reaches the alternate-path retry, and never crashes."""
+        self.corrupt(lambda rep: rep["project_tree"]["repository"]
+                     .__setitem__("source_root", ["toy"]))
+        r = self.run_collect()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sec = json.loads((self.study / "collection.json").read_text())["spotlights"]
+        self.assertEqual([c["candidate_id"] for c in sec["claims_draft"]],
+                         ["cand-toy_cache-0002", "cand-toy_cache-0001",
+                          "cand-toy_cache-0003"])
+
+    def test_numeric_string_line_numbers_still_cite(self):
+        """The guard must not over-block: an int-in-string spelling ('4')
+        that int() accepts still cites — the engine's numeric spellings vary
+        (json 10**400 → int, engines writing "4"), and only the truly
+        non-numeric spellings degrade."""
+        self.corrupt(lambda rep: rep["candidates"][0]["locations"][0]
+                     ["spans"][0].__setitem__("line_start", "3"))
+        r = self.run_collect()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sec = json.loads((self.study / "collection.json").read_text())["spotlights"]
+        self.assertIn("cand-toy_cache-0001",
+                      [c["candidate_id"] for c in sec["claims_draft"]])
+
+
 class EngineShapeDriftResidualTest(unittest.TestCase):
     """The three residual engine-JSON shape-drift faces PR #113 deliberately
     left open (its scope was the :360 span and :343 project_tree guards):

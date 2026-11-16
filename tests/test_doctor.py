@@ -23,6 +23,9 @@ DOCTOR = SCRIPTS / "doctor.py"
 sys.path.insert(0, str(SCRIPTS))
 import doctor  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _cov_child_env import covsite_env  # noqa: E402
+
 METHODS = {"code-reading", "telemetry-snapshot", "spotlights-static",
            "spotlights-telemetry", "nous-blis", "sim2real-prep"}
 
@@ -63,7 +66,8 @@ class DoctorEnv(unittest.TestCase):
                     "INVESTIGATION_CONFIG_HOME": str(self.cfg),
                     "GIT_CONFIG_NOSYSTEM": "1", "LANG": "C.UTF-8",
                     **{k: v for k, v in os.environ.items()
-                     if k.startswith("COVERAGE_")}}
+                     if k.startswith("COVERAGE_")},
+                    **covsite_env()}
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)

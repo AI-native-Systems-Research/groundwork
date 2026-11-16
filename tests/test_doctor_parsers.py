@@ -84,6 +84,22 @@ class LatestRelease(unittest.TestCase):
             self.assertEqual(doctor.latest_release("https://x"),
                              {"tag": "v1.0.0", "sha": "bbb222"})
 
+    def test_duplicate_lightweight_tag_keeps_the_first_sha(self):
+        # The same version tag listed twice (both lightweight): the second
+        # line must not overwrite the first — `peeled or name not in tags`
+        # is false for it, and the scan moves on. A third, higher tag proves
+        # the loop continued past the duplicate instead of ending the scan.
+        out = ("aaa111\trefs/tags/v1.0.0\n"
+               "bbb222\trefs/tags/v1.0.0\n"
+               "ccc333\trefs/tags/v1.1.0\n")
+        with mock.patch.object(doctor, "run", return_value=out):
+            self.assertEqual(doctor.latest_release("https://x"),
+                             {"tag": "v1.1.0", "sha": "ccc333"})
+        # Duplicate as the only tag: the retained sha is the discriminator.
+        out_pair = "aaa111\trefs/tags/v1.0.0\nbbb222\trefs/tags/v1.0.0\n"
+        with mock.patch.object(doctor, "run", return_value=out_pair):
+            self.assertEqual(doctor.latest_release("https://x")["sha"], "aaa111")
+
     def test_no_tags_gives_none_tag(self):
         with mock.patch.object(doctor, "run", return_value="zzz\trefs/heads/main"):
             self.assertEqual(doctor.latest_release("https://x"),
@@ -204,6 +220,21 @@ class InstalledInfo(unittest.TestCase):
         info = doctor.installed_info(str(self.exe), "fakedist")
         self.assertIsNone(info["version"])
 
+    def test_metadata_without_a_version_line_leaves_version_unset(self):
+        # A readable METADATA that simply has no `Version:` header: the scan
+        # runs to the end of the file instead of breaking on a match, and the
+        # other dist-info facts (sha from direct_url.json) still land.
+        di = self.site / "fakedist-1.0.0.dist-info"
+        di.mkdir(parents=True)
+        (di / "METADATA").write_text("Name: fakedist\nSummary: no version here\n")
+        (di / "direct_url.json").write_text(json.dumps(
+            {"url": "https://github.com/org/repo.git",
+             "vcs_info": {"commit_id": "a" * 40, "requested_revision": "main"}}))
+        info = doctor.installed_info(str(self.exe), "fakedist")
+        self.assertIsNone(info["version"])
+        self.assertEqual(info["sha"], "a" * 40)
+        self.assertEqual(info["ref"], "main")
+
 
 class EngineInfo(unittest.TestCase):
     """engine_info: config checkouts, PATH installs, missing engines, pins."""
@@ -313,6 +344,23 @@ class EngineInfo(unittest.TestCase):
             for _ in range(2):
                 self.engine("nous", machine, offline=False, cache=cache)
         self.assertEqual(lr.call_count, 1)
+
+    def test_install_matching_latest_release_only_reports_the_stale_pin(self):
+        # Installed sha == latest release sha: no "differs from the latest
+        # upstream release" drift warning, but a version-pattern pin that is
+        # not the release tag is still stale and still warns.
+        head = make_repo(self.tmp / "eng")
+        machine = {"engines": {"nous": str(self.tmp / "eng")}}
+        rel = {"tag": "v9.9.9", "sha": head}
+        with mock.patch.object(doctor, "latest_release", return_value=rel):
+            e = self.engine("nous", machine, {"nous-pin": "v1.0.0@zzzzzzz"},
+                            offline=False)
+        self.assertEqual(e["latest_release"], rel)
+        self.assertTrue(e["latest_checked"])
+        self.assertFalse(any("differs from the latest upstream release" in w
+                             for w in e["warnings"]))
+        self.assertTrue(any("pin v1.0.0@zzzzzzz is not the latest release v9.9.9" in w
+                            for w in e["warnings"]))
 
 
 if __name__ == "__main__":
