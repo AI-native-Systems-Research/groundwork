@@ -27,7 +27,7 @@ job_unit() {
     "$PY" -m coverage erase
     "$PY" -m coverage run -m unittest discover tests || exit 1
     "$PY" -m coverage combine || exit 1
-    "$PY" -m coverage report
+    "$PY" -m coverage report || exit 1
     # Per-file floor: a total-only gate stays green when one file drops to 0%
     # (issues #2/#3/#8). ci-local.sh is currently the only gate for the
     # floor; the CI unit job's step is pending issue #70.
