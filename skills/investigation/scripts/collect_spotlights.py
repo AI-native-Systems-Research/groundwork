@@ -229,7 +229,12 @@ def estimate_values(report: dict, sorted_json, manifest) -> set:
         elif isinstance(v, str) and v.strip():
             vals.add(v.strip())
 
-    for c in report.get("candidates") or []:
+    # candidates/run are engine-authored report JSON nothing validates
+    # between the file read and here: a non-list candidates (an int) or a
+    # non-mapping run (a list) reads as a report without that block — the
+    # guard only ever forbids, so absence is safe.
+    cands = report.get("candidates")
+    for c in cands if isinstance(cands, list) else []:
         if not isinstance(c, dict):
             continue
         add(c.get("estimated_impact"))
@@ -244,7 +249,11 @@ def estimate_values(report: dict, sorted_json, manifest) -> set:
                 for k in ("score", "impact", "rationale", "rank"):
                     add(c.get(k))
     if isinstance(manifest, dict):
-        add((manifest.get("cost") or {}).get("amount_usd"))
+        # cost is engine-authored JSON nothing validates between the file
+        # read and here: a non-mapping cost (a list, a string) contributes no
+        # estimate — absence is safe for this guard, it only ever forbids.
+        cost = manifest.get("cost")
+        add(cost.get("amount_usd") if isinstance(cost, dict) else None)
     return vals
 
 
@@ -302,7 +311,14 @@ def collect(study: Path, run_dir: Path, top: int, repo: Path, sha_override) -> d
     if result is None:
         raise CouldNotRun(f"{result_src} is not valid JSON")
     report = report_of(result)
-    candidates = [c for c in report.get("candidates") or [] if isinstance(c, dict)]
+    # candidates is engine-authored report JSON nothing validates between the
+    # file read and here: `or []` only catches None/absent, so a non-iterable
+    # candidates value (an int, a string) would raise TypeError at the
+    # comprehension. A non-list reads as a report with no candidates; the
+    # per-element isinstance guard below stays as is.
+    cands = report.get("candidates")
+    candidates = [c for c in (cands if isinstance(cands, list) else [])
+                  if isinstance(c, dict)]
 
     manifest_src = run_dir / "run_manifest.json"
     manifest = _load_json(manifest_src) if manifest_src.is_file() else None
@@ -343,7 +359,12 @@ def collect(study: Path, run_dir: Path, top: int, repo: Path, sha_override) -> d
                      "dir; those links don't resolve from the study copy")
 
     # 2. citations
-    target = (manifest or {}).get("target") or {}
+    # target is engine-authored manifest JSON nothing validates between the
+    # file read and here: a non-mapping target (a list, a string, an int)
+    # reads as a manifest without a target — no commit_sha, so the existing
+    # no-sha note below fires; never a crash that would lose the collection.
+    target = (manifest or {}).get("target")
+    target = target if isinstance(target, dict) else {}
     sha = sha_override or target.get("commit_sha") or None
     repo_label = _config.repo_name(repo)
     claims, cited = [], []
