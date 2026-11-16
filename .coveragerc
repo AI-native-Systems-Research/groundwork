@@ -15,6 +15,14 @@ source =
     skills/investigation/scripts
     scripts
 parallel = True
+; Measure branches, not just statements: a guard whose other outcome never runs
+; still counts its body as covered by statement alone (measured at 8d40c69:
+; 94% statement vs 89% branch, 273 of 2548 arcs never taken, 205 partial
+; branches — including five in doctor.py while it read 100% by statement).
+; Both floors stay green with this on: fail_under=80 against the combined
+; statement+branch total (~92-94% at main) and the per-file 40% floor
+; (lowest branch-enabled file percent at main: 84.6%).
+branch = true
 ; subprocess: write a data file for each child that inherits COVERAGE_PROCESS_START.
 ; _exit: flush data when a child ends via os._exit() instead of a normal return.
 patch =
