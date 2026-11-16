@@ -18,6 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _cov_child_env import covsite_env  # noqa: E402
 from _runtime_util import kill_matching, request, wait_for  # noqa: E402
 from ains_runtime import adapters as A  # noqa: E402
 from ains_runtime import approval as AP  # noqa: E402
@@ -100,7 +101,8 @@ class Base(unittest.TestCase):
         self.env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.tmp),
                     "CLAUDE_CODE_ENTRYPOINT": "cli",
                     **{k: v for k, v in os.environ.items()
-                     if k.startswith("COVERAGE_")}}
+                     if k.startswith("COVERAGE_")},
+                    **covsite_env()}
         self.n = 0
 
     def _cleanup(self):

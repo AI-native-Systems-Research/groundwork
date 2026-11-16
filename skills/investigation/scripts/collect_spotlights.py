@@ -206,6 +206,17 @@ def _parses_exactly(text: str, f: float) -> bool:
         return False
 
 
+def run_field(report: dict, key: str):
+    """report.run.<key> with every hop guarded (the isinstance-before-.get
+    shape spotlights_static.py uses around its report extraction): the run
+    block is engine-authored JSON nothing validates between the file read
+    and here, so a non-mapping run (a list, a bare string) reads as a run
+    without that field — the estimate guard simply skips it — never a
+    crash that would lose the whole run's collection."""
+    run = report.get("run") if isinstance(report.get("run"), dict) else {}
+    return run.get(key)
+
+
 def estimate_values(report: dict, sorted_json, manifest) -> set:
     """Every Spotlights estimate in the run; none may be a claim value."""
     vals = set()
@@ -231,8 +242,7 @@ def estimate_values(report: dict, sorted_json, manifest) -> set:
         for p in c.get("proposals") or []:
             if isinstance(p, dict):
                 add(p.get("expected_effect"))
-    run = report.get("run")
-    add(run.get("cost_usd") if isinstance(run, dict) else None)
+    add(run_field(report, "cost_usd"))
     if isinstance(sorted_json, dict):
         for c in sorted_json.get("candidates") or []:
             if isinstance(c, dict):
@@ -312,8 +322,19 @@ def collect(study: Path, run_dir: Path, top: int, repo: Path, sha_override) -> d
 
     manifest_src = run_dir / "run_manifest.json"
     manifest = _load_json(manifest_src) if manifest_src.is_file() else None
-    if manifest is None:
-        notes.append(f"no readable run_manifest.json in {run_dir}")
+    if not isinstance(manifest, dict):
+        # The manifest is engine-authored JSON nothing validates between the
+        # file read and here: unreadable AND non-mapping (a JSON list, an
+        # int, a string) both mean no manifest, landing in the same
+        # note-and-continue tier as the unreadable case — the shape the
+        # cost hop above (estimate_values :235-236) already uses. Only a
+        # dict-shaped manifest is ever copied or read for fields.
+        if manifest is not None:
+            notes.append(f"run_manifest.json in {run_dir} is not a JSON object; "
+                         "ignored")
+        else:
+            notes.append(f"no readable run_manifest.json in {run_dir}")
+        manifest = None
     sorted_md = find_sorted(run_dir, "sorted_candidates.md")
     sorted_js = find_sorted(run_dir, "sorted_candidates.json")
     if sorted_md is None:
@@ -366,8 +387,8 @@ def collect(study: Path, run_dir: Path, top: int, repo: Path, sha_override) -> d
     # validates it between the file read and here), so every .get hop is
     # guarded: a non-mapping shape (a list, a string) means no source_root —
     # the existing None path, whose alternate-path retry then simply never
-    # fires — not a crash. Same guard shape as PR #113 for this site; kept
-    # here so this branch is self-contained against every type-flip probe.
+    # fires — not a crash. The isinstance-before-.get shape is the one
+    # spotlights_static.py already uses around its report extraction.
     tree = report.get("project_tree") if isinstance(report.get("project_tree"), dict) else {}
     repository = tree.get("repository") if isinstance(tree.get("repository"), dict) else {}
     source_root = repository.get("source_root")
@@ -389,7 +410,15 @@ def collect(study: Path, run_dir: Path, top: int, repo: Path, sha_override) -> d
             if lines is None:
                 notes.append(f"{cid}: {path} not found at {repo_label}@{full_sha[:8]}")
                 continue
-            start, end = int(span["line_start"]), int(span["line_end"])
+            try:
+                start, end = int(span["line_start"]), int(span["line_end"])
+            except (ValueError, TypeError):
+                # engine-authored span lines in a non-int spelling ('L3',
+                # None, a float-bearing string) are a per-candidate skip,
+                # like the out-of-range tier below, never a whole-run crash.
+                notes.append(f"{cid}: span lines {span.get('line_start')!r}-{span.get('line_end')!r} "
+                             "not numeric; citation skipped")
+                continue
             if start < 1 or end < start or end > len(lines):
                 notes.append(f"{cid}: lines L{start}-L{end} out of range ({path} has "
                              f"{len(lines)} lines at {full_sha[:8]})")
@@ -430,13 +459,13 @@ def collect(study: Path, run_dir: Path, top: int, repo: Path, sha_override) -> d
                 for p in c.get("proposals") or [] if isinstance(p, dict)],
         })
 
-    # run/context are engine-authored report blocks (same class as the hops
-    # above): a non-mapping run or context reads as a report without that
-    # block — absent run_id/pipeline/objective, never a crash.
-    run = report.get("run")
-    run = run if isinstance(run, dict) else {}
-    context = report.get("context")
-    context = context if isinstance(context, dict) else {}
+    # run/context are engine-authored report blocks (nothing validates them
+    # between the file read and here), so both are read through the guarded
+    # hop shape: a non-mapping run or context (a list, a string) reads as a
+    # report without that block — absent run_id/pipeline/objective in the
+    # section, never a crash after the citations are already drafted.
+    run = report.get("run") if isinstance(report.get("run"), dict) else {}
+    context = report.get("context") if isinstance(report.get("context"), dict) else {}
     return {
         "run_dir": str(run_dir),
         "run_id": run.get("run_id") or (manifest or {}).get("run_id"),

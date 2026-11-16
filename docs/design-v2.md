@@ -1,6 +1,6 @@
 # Investigation skill v2 — design
 
-Status: **draft for owner review** (2026-11-05). Nothing here is implemented yet.
+Status: Implemented. The owner accepted this design 2026-11-05; [implementation-plan-v2.md](implementation-plan-v2.md) shipped it (phases P1–P7 done; see that plan's F-row decisions).
 
 ## Why a v2
 

@@ -202,6 +202,17 @@ class TestCollectRepo(InProcessEnv):
         self.assertEqual(ri["upstream_remote"], "ghost")
         self.assertIn("no remote named 'ghost'", ri["upstream_reason"])
 
+    def test_configured_upstream_present_in_remotes_does_not_warn(self):
+        # A configured upstream_remote that the repo actually has is the plain
+        # answer: no "(warning: no remote named ...)" suffix, and the other
+        # remotes are still reported as forks.
+        repo = make_repo(self.tmp / "t", {"origin": "git@x:me/t.git",
+                                          "kelly": "git@x:k/t.git"})
+        ri = doctor.repo_info(repo, {"upstream_remote": "kelly"})
+        self.assertEqual(ri["upstream_remote"], "kelly")
+        self.assertEqual(ri["upstream_reason"], "upstream_remote in the repo config")
+        self.assertEqual(ri["fork_remotes"], ["origin"])
+
     def test_push_remote_ladder_reads_git_config(self):
         repo = make_repo(self.tmp / "t", {"origin": "git@x:org/t.git",
                                           "kelly": "git@x:k/t.git"})
@@ -384,6 +395,41 @@ class TestMethods(unittest.TestCase):
         self.assertTrue(m["sim2real-prep"]["available"])
         self.assertFalse(m["telemetry-snapshot"]["available"])  # no kubectl, no url
         self.assertFalse(m["spotlights-telemetry"]["available"])  # by design
+
+    def test_spotlights_telemetry_reason_names_the_stage01_fact_filenames(self):
+        # The reason is built from the stage01_inputs fact, so the filenames
+        # it names are the ones spotlights.json holds (cited to the locked
+        # commit) — not a prose restatement that can drift on a lock bump.
+        m = self.methods()
+        reason = m["spotlights-telemetry"]["reason"]
+        import upstreams as U
+        f = U.fact("spotlights", "stage01_inputs")
+        self.assertIn(f["otel_discriminator"], reason)
+        self.assertIn(f["signals_files"][0], reason)
+        self.assertEqual(reason, doctor._spotlights_telemetry_reason())
+        # The fact-sourced build must equal the literal fallback: when the
+        # facts file is unreadable doctor still reports the same words.
+        self.assertEqual(reason, doctor.SPOTLIGHTS_TELEMETRY_REASON)
+
+    def test_spotlights_telemetry_reason_falls_back_when_facts_unreadable(self):
+        # doctor must still report with a broken/unreadable upstreams folder
+        # (same resilience as read_pins); the fallback is the literal.
+        import builtins
+        real_import = builtins.__import__
+
+        def blocked(name, *a, **k):
+            if name == "upstreams":
+                raise ImportError("blocked")
+            return real_import(name, *a, **k)
+
+        builtins.__import__ = blocked
+        try:
+            reason = doctor._spotlights_telemetry_reason()
+        finally:
+            builtins.__import__ = real_import
+        self.assertEqual(reason, doctor.SPOTLIGHTS_TELEMETRY_REASON)
+        self.assertIn("traces.jsonl", reason)
+        self.assertIn("01_signals.json", reason)
 
     def test_git_missing_disables_code_reading(self):
         tools = dict(self.TOOLS, git={"path": None})
@@ -642,6 +688,17 @@ class TestHelpers(unittest.TestCase):
         self.assertEqual(doctor._frontmatter_meta(p), {"version": "1"})
         p.write_text("---\nmetadata:\n  version: \"1.2.3\"\n")
         self.assertEqual(doctor._frontmatter_meta(p), {"version": "1.2.3"})
+
+    def test_frontmatter_meta_skips_non_key_lines_under_metadata(self):
+        # An indented line under `metadata:` that is not `key: value` (a list
+        # item, plain prose) must be skipped without ending the scan: keys on
+        # both sides of it still land in the result.
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        p = tmp / "m.md"
+        p.write_text("---\nmetadata:\n  version: 1\n  - a list item\n  runtime-version: 2\n---\n")
+        self.assertEqual(doctor._frontmatter_meta(p),
+                         {"version": "1", "runtime-version": "2"})
 
     def test_read_pins_lock_json_wins_over_skill_md_pins(self):
         tmp = Path(tempfile.mkdtemp())

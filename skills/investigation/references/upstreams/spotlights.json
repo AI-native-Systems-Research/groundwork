@@ -48,6 +48,11 @@
       "value": ["--artifacts-dir", "--output-folder"],
       "source": "cli.py:836-837: the dry run creates both directories"
     },
+    "stage01_inputs": {
+      "value": {"signals_files": ["01_signals.json", "signals.json", "signal.json"],
+                "otel_discriminator": "traces.jsonl"},
+      "source": "src/spotlights_engine/signal_pipeline/stages/s01_signal_extraction.py:45 _DIR_CANDIDATES and :50 _OTEL_DISCRIMINATOR; anything else raises FileNotFoundError in _resolve_signals_file (:93-108)"
+    },
     "outcomes": {
       "value": ["candidates_found", "no_opportunity", "failed", "cancelled"],
       "source": "native stop reasons in result.json, plus the runtime's failed/cancelled"

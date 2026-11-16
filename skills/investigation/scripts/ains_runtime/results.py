@@ -79,6 +79,11 @@ VALIDATOR = SCRIPTS / "validate_answer.py"
 VALIDATOR_NAME = "validate_answer.py"
 VALIDATOR_TIMEOUT_S = 300
 COORDINATOR_OUTCOMES = ("supported", "not_supported", "inconclusive", "other")
+# The Spotlights native outcomes come from the fact the adapter reads
+# (spotlights.json outcomes) — the same value adapters/spotlights_static.py
+# emits, so a lock bump renaming one changes both sides together.
+from .adapters.spotlights_static import (  # noqa: E402  (fact-sourced outcomes)
+    CANDIDATES_FOUND as SPOT_CANDIDATES_FOUND, NO_OPPORTUNITY as SPOT_NO_OPPORTUNITY)
 # Stored states a result can be built for (terminal, or stuck for the owner).
 RESULTABLE = ("completed", "failed", "cancelled", "rejected", "not_launched",
               "recovery_required")
@@ -212,14 +217,14 @@ def spotlights_static(collected: dict, record: dict) -> Normalized:
                "models": sem.get("models"), "hints": sem.get("hints"),
                "module_status": collected.get("module_status"), "n_candidates": n,
                "output_folder": (record.get("non_material") or {}).get("output_folder")}
-    if outcome == "candidates_found":
-        expl = (f"candidates_found: {n} candidate(s). Candidates are model estimates "
-                "of where to look, not measurements")
+    if outcome == SPOT_CANDIDATES_FOUND:
+        expl = (f"{SPOT_CANDIDATES_FOUND}: {n} candidate(s). Candidates are model "
+                "estimates of where to look, not measurements")
         if collected.get("partial"):
             expl += f" ({collected.get('reason')})"
-    elif outcome == "no_opportunity":
-        expl = ("no_opportunity: the run completed and found no candidate in the "
-                "included modules")
+    elif outcome == SPOT_NO_OPPORTUNITY:
+        expl = (f"{SPOT_NO_OPPORTUNITY}: the run completed and found no candidate "
+                "in the included modules")
     else:
         expl = f"{outcome}: {collected.get('reason') or 'no reason recorded'}"
     st = col.get("state") if col.get("state") in COLLECTION_STATES else "failed"
@@ -229,7 +234,7 @@ def spotlights_static(collected: dict, record: dict) -> Normalized:
             or "not collected"
     norm = Normalized(
         st, reason, explanation=expl, partial=bool(collected.get("partial")),
-        outcome="other" if outcome in ("candidates_found", "no_opportunity")
+        outcome="other" if outcome in (SPOT_CANDIDATES_FOUND, SPOT_NO_OPPORTUNITY)
         else "unavailable",
         limitations=list(collected.get("limitations") or []), methods=methods,
         spend=_spend(collected.get("spend")), notes=list(collected.get("notes") or []))
@@ -384,9 +389,16 @@ def run_validator(store: Store, inv_id: str, answer: Path | None, *,
                   f"--- stdout\n{so}--- stderr\n{se}", encoding="utf-8")
     first = next((ln for ln in se.splitlines() if ln and not ln.startswith("warning:")),
                  "")
+    # _ref, not make_ref: the answer may have become unreadable since the
+    # subprocess opened it (permissions changed under us) — run_validator
+    # never raises, and contracts.py makes both refs optional, so the
+    # failed verdict and the report_ref survive without the answer_ref.
     out = {"state": "passed" if rc == 0 else "failed", "validator": VALIDATOR_NAME,
-           "exit_code": rc, "answer_ref": make_ref("answer-json", answer),
-           "report_ref": make_ref("validator-report", rp)}
+           "exit_code": rc}
+    ar = _ref("answer-json", answer)
+    if ar is not None:
+        out["answer_ref"] = ar
+    out["report_ref"] = _ref("validator-report", rp)
     if rc != 0:
         out["reason"] = (f"exit {rc}" if rc is not None else "did not finish") + (
             f": {first}" if first else "")
@@ -395,15 +407,30 @@ def run_validator(store: Store, inv_id: str, answer: Path | None, *,
 
 # --- the record ----------------------------------------------------------------
 
-def _ref(kind: str, loc, *, final: bool = True) -> dict | None:
+def _ref(kind: str, loc, *, final: bool = True, env: Mapping[str, str] | None = None) -> dict | None:
     """A file gets a digest when final; a directory or a mutable file is
-    provisional (no portable identity, spec §6)."""
+    provisional (no portable identity, spec §6).
+
+    With `env`, a file whose bytes contain a secret value is never bound as
+    evidence: the ref is dropped (None), the same refusal _collect applies
+    to adapter output. This is the belt-and-braces for logs written before
+    the supervisor's exit-time redaction existed (or by an older supervisor):
+    a log that still carries the credential must not be digested into the
+    immutable result record.
+    """
     if not loc:
         return None
     p = Path(loc)
     kind = re.sub(r"[^a-z0-9._-]+", "-", kind.lower()).strip("-.")[:64] or "artifact"
     try:
         if p.is_file():
+            if env is not None:
+                try:
+                    text = p.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    text = None
+                if text is not None and find_secret_values(text, env):
+                    return None
             return make_ref(kind, p, provisional=not final)
         if p.exists():
             return make_ref(kind, p, provisional=True)
@@ -412,7 +439,7 @@ def _ref(kind: str, loc, *, final: bool = True) -> dict | None:
     return None
 
 
-def _execution(store: Store, inv: dict) -> dict:
+def _execution(store: Store, inv: dict, *, env: Mapping[str, str] | None = None) -> dict:
     from .recovery import lifecycle
     terminal = inv["state"] in ("completed", "failed", "cancelled", "rejected",
                                 "not_launched")
@@ -422,7 +449,11 @@ def _execution(store: Store, inv: dict) -> dict:
     diags, seen = [], set()
     logs = ((inv.get("launch") or {}).get("logs") or {})
     for name, loc in sorted(logs.items()):
-        r = _ref(f"{name}-log", loc, final=terminal)
+        # The launch logs are the engine's raw stdout/stderr: guard them against
+        # the caller's secret values (a log written before the supervisor's
+        # exit-time redaction, or by an older supervisor, is refused as
+        # evidence rather than digested — see _ref).
+        r = _ref(f"{name}-log", loc, final=terminal, env=env)
         if r:
             diags.append(r)
             seen.add(r["location"])
@@ -567,12 +598,12 @@ def build(store: Store, inv_id: str, *, env: Mapping[str, str] | None = None,
         raise ResultError(f"invocation {inv_id} is {inv['state']}, not terminal; run "
                           "`status` until it is (a result never waits or reruns)")
     rec = store.get_preparation(inv["prep_id"])["record"]
-    execution = _execution(store, inv)
+    execution = _execution(store, inv, env=env)
     if outcome is not None:     # refuse a bad --outcome before collecting anything
         _outcome(Normalized("collected", explanation=""), execution, rec, outcome)
     col, norm = _collect(store, inv_id, env, study)
     inv = store.get_invocation(inv_id)
-    execution = _execution(store, inv)
+    execution = _execution(store, inv, env=env)
     oc = _outcome(norm, execution, rec, outcome)
     n = 1 + sum(1 for e in store.list_events(entity_id=inv_id) if e["event"] == EV_RESULT)
     if study is None:
