@@ -4,6 +4,8 @@ A stdlib http.server in a thread plays Prometheus: it answers
 /api/v1/query_range with recorded fixtures under tests/fixtures/prom/,
 chosen by the PromQL text. Nothing here talks to a real cluster.
 """
+import contextlib
+import io
 import json
 import os
 import re
@@ -599,6 +601,93 @@ class TestHttpResponseClassification(Base):
         self.assertIn("***", cap["failed_queries"][self.BAD])
         self.assertNotIn(token, r.stdout + r.stderr)
         self.assertNotIn(token, (self.cap_dir() / "capture.json").read_text())
+
+
+class TestHTTPErrorBodyReadFailure(Base):
+    """A server (or proxy) that answers an HTTP error status and then breaks
+    the connection mid-body must not crash the CLI: the body read is transport
+    I/O that can fail after the status line, so it is classified as that
+    query's request failure (a partial capture), like any unreachable server.
+    Both abort shapes a broken peer produces are covered: an RST (raises
+    ConnectionResetError, an OSError) and an orderly close short of the
+    announced Content-Length (raises http.client.IncompleteRead, an
+    HTTPException that is NOT an OSError)."""
+
+    BAD = "bad"     # any query whose promql is not vllm_running gets the abort
+
+    @staticmethod
+    def handler_for(mode):
+        ok = (FIX / "query_range-vllm_running.json").read_bytes()
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                form = urllib.parse.parse_qs(self.rfile.read(n).decode())
+                if "vllm_running" in form["query"][0]:
+                    code, out = 200, ok
+                    self.send_response(code)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(out)))
+                    self.end_headers()
+                    self.wfile.write(out)
+                    return
+                # A 403 with an announced-but-never-delivered body: this
+                # sandbox's egress proxy shape (cleartext non-loopback).
+                self.send_response(403)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", "500")
+                self.end_headers()
+                self.wfile.write(b"<html>forbidden</html>" * 4)
+                time.sleep(0.05)
+                if mode == "reset":
+                    # SO_LINGER 0: the next close sends an RST, so the
+                    # client's e.read() raises ConnectionResetError.
+                    self.connection.setsockopt(
+                        socket.SOL_SOCKET, socket.SO_LINGER,
+                        struct.pack("ii", 1, 0))
+                # Either way (RST or FIN) the body never arrives in full.
+                self.close_connection = True
+                self.connection.close()
+        return H
+
+    def capture(self, mode):
+        q = self.tmp / "q.yaml"
+        q.write_text("good: vllm_running\nbad: up(1)\n")
+        handler = self.handler_for(mode)
+        with FakeServer(handler) as p:
+            r = self.run_cli("--url", p.url, "--queries", str(q))
+        return r
+
+    def test_reset_mid_error_body_is_a_per_query_failure(self):
+        r = self.capture("reset")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"failed: {self.BAD}", r.stdout)
+        cap = json.loads((self.cap_dir() / "capture.json").read_text())
+        self.assertIn("HTTP 403", cap["failed_queries"][self.BAD])
+        self.assertIn("body read failed", cap["failed_queries"][self.BAD])
+        self.assertIn("ConnectionResetError", cap["failed_queries"][self.BAD])
+        # A partial failure, not a total one: the good query is still captured.
+        self.assertEqual([p.name for p in (self.cap_dir() / "prom").iterdir()],
+                         ["good.json"])
+        # The CLI must not die with a traceback over this.
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertNotIn("Traceback", r.stdout)
+
+    def test_truncated_error_body_is_a_per_query_failure(self):
+        r = self.capture("truncate")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"failed: {self.BAD}", r.stdout)
+        cap = json.loads((self.cap_dir() / "capture.json").read_text())
+        self.assertIn("HTTP 403", cap["failed_queries"][self.BAD])
+        self.assertIn("body read failed", cap["failed_queries"][self.BAD])
+        self.assertIn("IncompleteRead", cap["failed_queries"][self.BAD])
+        self.assertEqual([p.name for p in (self.cap_dir() / "prom").iterdir()],
+                         ["good.json"])
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertNotIn("Traceback", r.stdout)
 
 
 class TestSuccessBodyTruncation(Base):
@@ -1275,6 +1364,86 @@ class TestPortForward(Base):
         self.assertEqual(r.returncode, 1)
         self.assertIn("not found", r.stderr)
 
+
+class TestMainSignalHandling(unittest.TestCase):
+    """main()'s KeyboardInterrupt arm: Ctrl-C during a capture is a clean
+    exit 130 with a message, never a traceback (the capture dir is left for
+    the next --capture-id to refuse; captures are frozen either way)."""
+
+    def test_keyboard_interrupt_exits_130_with_a_clean_message(self):
+        args = ["--study", ".", "--capture-id", "c1", "--url", "http://127.0.0.1:9",
+                "--start", START, "--end", END]
+        err = io.StringIO()
+        with mock.patch.object(capture_prom, "run", side_effect=KeyboardInterrupt), \
+                contextlib.redirect_stderr(err):
+            rc = capture_prom.main(args)
+        self.assertEqual(rc, 130)
+        self.assertIn("interrupted", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+
+    def test_capture_error_still_carries_its_own_code(self):
+        # The neighbouring arm this one could shadow: a CaptureError keeps
+        # its own exit code (2 for usage guards, 1 for run failures).
+        args = ["--study", ".", "--capture-id", "c1", "--url", "http://127.0.0.1:9",
+                "--start", START, "--end", END]
+        err = io.StringIO()
+        with mock.patch.object(capture_prom, "run",
+                               side_effect=capture_prom.CaptureError("boom", 2)), \
+                contextlib.redirect_stderr(err):
+            rc = capture_prom.main(args)
+        self.assertEqual(rc, 2)
+        self.assertIn("boom", err.getvalue())
+
+
+class TestSizeGuardRmdir(Base):
+    """The `except OSError: pass` around prom_dir.rmdir() after the bulk
+    move: a capture whose bulk was already relocated must never fail because
+    the (now empty) prom/ directory could not be removed — an NFS
+    silly-rename, a permission, a transient mount state. The moved record in
+    capture.json is the evidence; the empty dir staying behind is harmless.
+    Driven in-process so Path.rmdir can be made to fail exactly there."""
+
+    def test_unremovable_prom_dir_never_fails_the_capture(self):
+        env = {**self.env, "INVESTIGATION_SIZE_GUARD_BYTES": "10"}
+        overrides = {k: str(v) for k, v in env.items()
+                     if k.startswith("INVESTIGATION_")}
+        saved = {k: os.environ[k] for k in overrides if k in os.environ}
+        os.environ.update(overrides)
+
+        def _restore():
+            os.environ.update(saved)
+            for k in overrides:
+                if k not in saved:
+                    os.environ.pop(k, None)
+        self.addCleanup(_restore)
+        called = []
+
+        def busy_rmdir(self):
+            called.append(self)
+            raise OSError("prom dir busy (NFS silly-rename)")
+
+        args = capture_prom.build_parser().parse_args([
+            "--study", str(self.study), "--capture-id", "c1",
+            "--url", "http://127.0.0.1:1",  # replaced below
+            "--start", START, "--end", END, "--step", "30s",
+            "--queries", str(QUERIES)])
+        with FakeProm() as p:
+            args.url = p.url
+            out = io.StringIO()
+            with mock.patch.object(Path, "rmdir", busy_rmdir), \
+                    contextlib.redirect_stdout(out):
+                rc = capture_prom.run(args)
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertEqual(called, [self.cap_dir() / "prom"],
+                         "the guard must fire on prom/ itself, not another dir")
+        cap = json.loads((self.cap_dir() / "capture.json").read_text())
+        self.assertEqual(set(cap["moved"]),
+                         {"prom/running.json", "prom/nothing.json", "metrics.jsonl"})
+        for rel, info in cap["moved"].items():
+            self.assertTrue(Path(info["path"]).is_file(), rel)
+        # The empty prom/ dir stays behind — harmless, never a failure.
+        self.assertTrue((self.cap_dir() / "prom").is_dir())
+        self.assertEqual(list((self.cap_dir() / "prom").iterdir()), [])
 
 if __name__ == "__main__":
     unittest.main()

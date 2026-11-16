@@ -198,6 +198,7 @@ class WithoutCoverage(unittest.TestCase):
         self.assertIn("coverage is not installed", r.stderr)
 
 
+@unittest.skipUnless(HAVE_COVERAGE, "the fixture drives `coverage run`")
 class OnlyZeroStatementFiles(unittest.TestCase):
     """A data file holding only zero-statement files (empty __init__.py) must
     pass: nothing measurable is below the floor."""
