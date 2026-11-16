@@ -235,7 +235,7 @@ class ProcId(Base):
 
 class Launch(Base):
     def test_succeed_end_to_end(self):
-        prep = self.approved("succeed")
+        prep = self.approved("leak_secret")
         res = self.launch(prep)
         self.assertIn(res.state, ("reserved", "spawning", "running", "exited"))
         v = self.terminal(res.inv_id)
@@ -259,7 +259,12 @@ class Launch(Base):
         # Secrets never in logs or the DB. The engine PRINTS its secret here
         # (leak_secret), so this is the real sink, not a vacuous assert on an
         # engine that never says the word (the shipped quiet engines are
-        # covered by test_succeed_end_to_end_quiet_engine).
+        # covered by test_succeed_end_to_end_quiet_engine). The positive
+        # markers pin that the leak really happened and was really redacted,
+        # so this gate can never silently regress to a quiet engine again.
+        eng_text = Path(logs["engine"]).read_text()
+        self.assertIn("[REDACTED:$FAKE_API_TOKEN]", eng_text)
+        self.assertIn("engine log redacted", Path(logs["supervisor"]).read_text())
         for f in (logs["supervisor"], logs["engine"]):
             self.assertNotIn(SECRET, Path(f).read_text())
         self.assertNotIn(SECRET.encode(), self.db.read_bytes())
