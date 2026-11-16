@@ -452,6 +452,36 @@ class ExportCommand(Base):
         self.assertIn("export:", err)
         self.assertFalse((self.study / "runtime").exists())
 
+    def test_reexport_sweeps_a_crash_leftover_old_dir(self):
+        # export_study swaps each subdir via rename: dest -> .<sub>.old,
+        # tmp -> dest, rmtree(.old). The state planted below (live requests/
+        # present AND .requests.old present) models a crash after the second
+        # rename (export.py:91) and before the rmtree (:93); the next export
+        # must sweep that leftover (:88-89) before swapping again, so the
+        # stale copy cannot accumulate or survive as a second source of
+        # records. A crash between the two renames instead leaves dest absent
+        # + .old present, which the sweep arm — gated behind dest.exists()
+        # at :86 — only sweeps on the export after the next one; whether that
+        # dest-absent window should also be swept is a maintainer decision.
+        self.submitted()
+        rc, out, err = self.cli("export")
+        self.assertEqual(rc, 0, err)
+        root = self.study / "runtime"
+        self.assertTrue((root / "requests" / "req-1.json").is_file())
+        # Simulate the crash leftover: a .requests.old sibling holding the
+        # previous generation's records.
+        leftover = root / ".requests.old"
+        leftover.mkdir()
+        (leftover / "req-1.json").write_text('{"stale": true}')
+        rc, out, err = self.cli("export")
+        self.assertEqual(rc, 0, err)
+        self.assertFalse(leftover.exists())
+        self.assertFalse(any(p.name.endswith(".old") for p in root.iterdir()),
+                         sorted(p.name for p in root.iterdir()))
+        # The live directory is the fresh rewrite, not the leftover's content.
+        rec = json.loads((root / "requests" / "req-1.json").read_text())
+        self.assertNotIn("stale", rec)
+
 
 class LaunchCommand(Base):
     """cmd_launch's success path: the warning loop, the receipt and exit 0.
