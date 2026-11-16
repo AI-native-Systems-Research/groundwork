@@ -202,6 +202,17 @@ class TestCollectRepo(InProcessEnv):
         self.assertEqual(ri["upstream_remote"], "ghost")
         self.assertIn("no remote named 'ghost'", ri["upstream_reason"])
 
+    def test_configured_upstream_present_in_remotes_does_not_warn(self):
+        # A configured upstream_remote that the repo actually has is the plain
+        # answer: no "(warning: no remote named ...)" suffix, and the other
+        # remotes are still reported as forks.
+        repo = make_repo(self.tmp / "t", {"origin": "git@x:me/t.git",
+                                          "kelly": "git@x:k/t.git"})
+        ri = doctor.repo_info(repo, {"upstream_remote": "kelly"})
+        self.assertEqual(ri["upstream_remote"], "kelly")
+        self.assertEqual(ri["upstream_reason"], "upstream_remote in the repo config")
+        self.assertEqual(ri["fork_remotes"], ["origin"])
+
     def test_push_remote_ladder_reads_git_config(self):
         repo = make_repo(self.tmp / "t", {"origin": "git@x:org/t.git",
                                           "kelly": "git@x:k/t.git"})
@@ -642,6 +653,17 @@ class TestHelpers(unittest.TestCase):
         self.assertEqual(doctor._frontmatter_meta(p), {"version": "1"})
         p.write_text("---\nmetadata:\n  version: \"1.2.3\"\n")
         self.assertEqual(doctor._frontmatter_meta(p), {"version": "1.2.3"})
+
+    def test_frontmatter_meta_skips_non_key_lines_under_metadata(self):
+        # An indented line under `metadata:` that is not `key: value` (a list
+        # item, plain prose) must be skipped without ending the scan: keys on
+        # both sides of it still land in the result.
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        p = tmp / "m.md"
+        p.write_text("---\nmetadata:\n  version: 1\n  - a list item\n  runtime-version: 2\n---\n")
+        self.assertEqual(doctor._frontmatter_meta(p),
+                         {"version": "1", "runtime-version": "2"})
 
     def test_read_pins_lock_json_wins_over_skill_md_pins(self):
         tmp = Path(tempfile.mkdtemp())
