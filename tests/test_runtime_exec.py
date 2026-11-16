@@ -238,7 +238,7 @@ class ProcId(Base):
 
 class Launch(Base):
     def test_succeed_end_to_end(self):
-        prep = self.approved("succeed")
+        prep = self.approved("leak_secret")
         res = self.launch(prep)
         self.assertIn(res.state, ("reserved", "spawning", "running", "exited"))
         v = self.terminal(res.inv_id)
@@ -259,10 +259,33 @@ class Launch(Base):
         self.assertIn("FAKE_API_TOKEN", names)        # campaign secret, by name
         self.assertIn("CLAUDE_CODE_ENTRYPOINT", names)  # D9 observed prefix
         self.assertNotIn("UNRELATED_VAR", names)
-        # Secrets never in logs or the DB.
+        # Secrets never in logs or the DB. The engine PRINTS its secret here
+        # (leak_secret), so this is the real sink, not a vacuous assert on an
+        # engine that never says the word (the shipped quiet engines are
+        # covered by test_succeed_end_to_end_quiet_engine). The positive
+        # markers pin that the leak really happened and was really redacted,
+        # so this gate can never silently regress to a quiet engine again.
+        eng_text = Path(logs["engine"]).read_text()
+        self.assertIn("[REDACTED:$FAKE_API_TOKEN]", eng_text)
+        self.assertIn("engine log redacted", Path(logs["supervisor"]).read_text())
         for f in (logs["supervisor"], logs["engine"]):
             self.assertNotIn(SECRET, Path(f).read_text())
         self.assertNotIn(SECRET.encode(), self.db.read_bytes())
+
+    def test_succeed_end_to_end_quiet_engine(self):
+        # The original shape of the end-to-end gate, against an engine that
+        # never prints the secret: pins that a WELL-BEHAVED engine's log is
+        # left byte-identical (the exit-time scrub rewrites nothing when
+        # there is nothing to redact).
+        prep = self.approved("succeed")
+        res = self.launch(prep)
+        v = self.terminal(res.inv_id)
+        self.assertEqual((v["state"], v["exit_code"]), ("completed", 0))
+        logs = v["logs"]
+        eng = Path(logs["engine"]).read_text()
+        self.assertNotIn(SECRET, eng)
+        self.assertNotIn("[REDACTED:", eng)
+        self.assertNotIn("engine log redacted", Path(logs["supervisor"]).read_text())
 
     def test_launch_returns_at_once(self):
         prep = self.approved("sleep_until_signalled")
@@ -736,6 +759,201 @@ class Supervise(Base):
                            capture_output=True, text=True, env=env, timeout=60)
         self.assertEqual(r.returncode, 2)
         self.assertIn("_supervise:", r.stderr)
+
+
+# --- the engine log's secret guard --------------------------------------------
+# The engine log is the engine's raw stdout+stderr, and the engine legitimately
+# holds the request's secret values (env_pass carries secret_vars). A leak
+# engine — the common real-world failure: verbose SDK logging, curl -v, an
+# echoing traceback — pins that the supervisor scrubs the log at exit and the
+# result path never digests a secret-bearing log as immutable evidence.
+
+class EngineLogSecrets(Base):
+    def supervise(self, *args, **kw):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = SV.supervise(*args, **kw)
+        return rc, buf.getvalue()
+
+    def leak(self, inv_id="inv-leak"):
+        """One approved leak_secret invocation, supervised in-process; returns
+        (inv_id, engine-log text, supervisor stdout)."""
+        prep = self.approved("leak_secret")
+        inv_id, _, _ = SV.reserve(self.store, prep, env=self.env, inv_id=inv_id)
+        SV.logs_dir(self.store).mkdir(parents=True, exist_ok=True)
+        return inv_id
+
+    def test_engine_log_is_redacted_at_exit(self):
+        inv_id = self.leak()
+        rc, log = self.supervise(self.store, inv_id, env=self.env)
+        self.assertEqual(rc, 0, f"supervise rc={rc}; log={log}")
+        v = self.terminal(inv_id)
+        self.assertEqual((v["state"], v["exit_code"]), ("completed", 0))
+        eng_log = Path(v["logs"]["engine"]).read_text()
+        # The engine DID print the secret (stdout and stderr)...
+        self.assertIn("[REDACTED:$FAKE_API_TOKEN]", eng_log)
+        # ...and the log on disk no longer carries the value.
+        self.assertNotIn(SECRET, eng_log)
+        # The supervisor's own stdout stays redacted too (it echoed nothing).
+        self.assertNotIn(SECRET, log)
+        self.assertIn("engine log redacted", log)
+        self.assertIn("secret value", log)
+        # The redaction happened BEFORE the EXITED transition: the digest
+        # results._execution binds is over the secret-free bytes.
+        from ains_runtime import results as RES
+        from ains_runtime.artifacts import file_digest
+        inv = self.store.get_invocation(inv_id)
+        ref = [d for d in RES._execution(self.store, inv, env=self.env)["diagnostics"]
+               if d["kind"] == "engine-log"]
+        self.assertEqual(len(ref), 1, ref)
+        self.assertEqual(ref[0]["digest"], file_digest(v["logs"]["engine"]))
+        self.assertNotIn(SECRET, Path(ref[0]["location"]).read_text())
+
+    def test_redact_engine_log_edge_cases(self):
+        # The scrub itself, on a plain file: no secrets -> untouched (False),
+        # a missing file -> False, an unreadable file -> False (never raises),
+        # secrets -> rewritten atomically, no .redacting residue left behind.
+        d = self.tmp / "logs"
+        d.mkdir()
+        clean = d / "clean.log"
+        clean.write_text("ordinary engine output\n")
+        self.assertFalse(SV.redact_engine_log(str(clean), self.env))
+        self.assertEqual(clean.read_text(), "ordinary engine output\n")
+        self.assertFalse(SV.redact_engine_log(str(d / "no-such.log"), self.env))
+        # A directory where a file is expected: not is_file(), no raise.
+        self.assertFalse(SV.redact_engine_log(str(d), self.env))
+        leaky = d / "leaky.log"
+        leaky.write_text(f"token {SECRET}\nand more {SECRET}\n")
+        self.assertTrue(SV.redact_engine_log(str(leaky), self.env))
+        self.assertEqual(leaky.read_text(),
+                         "token [REDACTED:$FAKE_API_TOKEN]\n"
+                         "and more [REDACTED:$FAKE_API_TOKEN]\n")
+        self.assertEqual(list(d.glob("*.redacting")), [])
+        # A quiet env (no secret values anywhere) redacts nothing.
+        quiet = d / "quiet.log"
+        quiet.write_text(f"value {SECRET}\n")
+        self.assertFalse(SV.redact_engine_log(str(quiet), {"PATH": "/bin"}))
+        self.assertEqual(quiet.read_text(), f"value {SECRET}\n")
+        # Undecodable bytes never crash the scrub (utf-8/replace), and the
+        # secret alongside them is still redacted.
+        binary = d / "binary.log"
+        binary.write_bytes(b"\xff\xfe raw bytes " + SECRET.encode() + b"\n")
+        self.assertTrue(SV.redact_engine_log(str(binary), self.env))
+        self.assertNotIn(SECRET, binary.read_text(errors="replace"))
+        # An empty log is left alone (nothing to redact).
+        empty = d / "empty.log"
+        empty.write_text("")
+        self.assertFalse(SV.redact_engine_log(str(empty), self.env))
+        # An unrewritable log (read-only directory): the scrub never raises
+        # on the exit path — it reports False and leaves the bytes as they
+        # were, for the result-time guard to refuse.
+        if os.access(d, os.W_OK):
+            ro = d / "ro"
+            ro.mkdir()
+            self.addCleanup(ro.chmod, 0o700)
+            (ro / "log.txt").write_text(f"hello {SECRET}\n")
+            ro.chmod(0o500)
+            self.assertFalse(SV.redact_engine_log(str(ro / "log.txt"), self.env))
+            self.assertIn(SECRET, (ro / "log.txt").read_text())
+
+    def test_detached_launch_redacts_the_engine_log(self):
+        # The real launch path (spawned supervisor, own session): the scrub
+        # must fire there too, not only under the in-process harness.
+        prep = self.approved("leak_secret")
+        res = self.launch(prep)
+        v = self.terminal(res.inv_id)
+        self.assertEqual((v["state"], v["exit_code"]), ("completed", 0))
+        eng_log = Path(v["logs"]["engine"]).read_text()
+        self.assertIn("[REDACTED:$FAKE_API_TOKEN]", eng_log)
+        self.assertNotIn(SECRET, eng_log)
+        sup_log = Path(v["logs"]["supervisor"]).read_text()
+        self.assertNotIn(SECRET, sup_log)
+        self.assertIn("engine log redacted", sup_log)
+
+    def test_result_refuses_a_secret_bearing_engine_log(self):
+        # Belt-and-braces: a log that still carries the secret at result time
+        # (written by an older supervisor, or after a failed scrub) is never
+        # bound as evidence — _execution drops the engine-log ref entirely.
+        inv_id = self.leak("inv-leak-raw")
+        # Neutralize the exit-time scrub to simulate the pre-fix supervisor:
+        # re-plant the raw secret bytes after supervise() returns.
+        rc, log = self.supervise(self.store, inv_id, env=self.env)
+        self.assertEqual(rc, 0, log)
+        v = self.terminal(inv_id)
+        self.assertEqual(v["state"], "completed")
+        from ains_runtime import results as RES
+        eng_log = Path(v["logs"]["engine"])
+        eng_log.write_text(f"late-echoed token {SECRET}\n")
+        inv = self.store.get_invocation(inv_id)
+        execution = RES._execution(self.store, inv, env=self.env)
+        kinds = [d["kind"] for d in execution["diagnostics"]]
+        self.assertNotIn("engine-log", kinds)
+        # The in-process harness never creates the supervisor log file (the
+        # supervisor's own lines went to captured stdout), so nothing else
+        # is bound here except the native evidence. The detached path keeps
+        # its supervisor-log ref (test_detached_launch_redacts_the_engine_log
+        # covers that mode end to end).
+
+    def test_result_refuses_a_secret_bearing_log_without_env(self):
+        # No env -> no guard: the historical signature (used by tests and any
+        # future caller that has no env at hand) keeps binding the log. This
+        # pins that the guard is env-keyed, like every other in the runtime.
+        inv_id = self.leak("inv-leak-noenv")
+        rc, log = self.supervise(self.store, inv_id, env=self.env)
+        self.assertEqual(rc, 0, log)
+        self.terminal(inv_id)
+        from ains_runtime import results as RES
+        eng_log = Path(self.store.get_invocation(inv_id)["launch"]["logs"]["engine"])
+        eng_log.write_text(f"late-echoed token {SECRET}\n")
+        inv = self.store.get_invocation(inv_id)
+        kinds = [d["kind"] for d in RES._execution(self.store, inv)["diagnostics"]]
+        self.assertIn("engine-log", kinds)
+
+    def test_result_guard_survives_an_unreadable_log(self):
+        # The secret check never fails the result: a log that cannot be read
+        # at result time is handled by _ref's existing OSError arms — no
+        # traceback out of build(), no digest of unknown bytes.
+        inv_id = self.leak("inv-leak-unreadable")
+        rc, log = self.supervise(self.store, inv_id, env=self.env)
+        self.assertEqual(rc, 0, log)
+        self.terminal(inv_id)
+        from ains_runtime import results as RES
+        eng_log = Path(self.store.get_invocation(inv_id)["launch"]["logs"]["engine"])
+        # (a) a directory in place of the log: provisional, no digest.
+        eng_log.unlink()
+        eng_log.mkdir()
+        inv = self.store.get_invocation(inv_id)
+        ref = [d for d in RES._execution(self.store, inv, env=self.env)["diagnostics"]
+               if d["kind"] == "engine-log"]
+        self.assertEqual(len(ref), 1, ref)
+        self.assertTrue(ref[0]["provisional"])
+        self.assertNotIn("digest", ref[0])
+        # (b) an unreadable FILE: the guard cannot read it, make_ref cannot
+        # hash it — the ref is dropped, never a traceback.
+        import shutil
+        shutil.rmtree(eng_log)
+        eng_log.write_text("engine output\n")
+        eng_log.chmod(0)
+        self.addCleanup(eng_log.chmod, 0o600)
+        if os.access(eng_log, os.R_OK):     # running as root: nothing to pin
+            self.skipTest("cannot make a file unreadable as this user")
+        self.assertIsNone(RES._ref("engine-log", eng_log, final=True, env=self.env))
+        kinds = [d["kind"] for d in RES._execution(self.store, inv, env=self.env)["diagnostics"]]
+        self.assertNotIn("engine-log", kinds)
+
+    def test_build_refuses_a_secret_bearing_engine_log(self):
+        # The full `result` path: build() must not emit an engine-log
+        # diagnostics ref for a log that carries the secret at result time.
+        inv_id = self.leak("inv-leak-build")
+        rc, log = self.supervise(self.store, inv_id, env=self.env)
+        self.assertEqual(rc, 0, log)
+        self.terminal(inv_id)
+        inv = self.store.get_invocation(inv_id)
+        Path(inv["launch"]["logs"]["engine"]).write_text(f"echo {SECRET}\n")
+        from ains_runtime import results as RES
+        out = RES.build(self.store, inv_id, env=self.env)
+        diags = out["message"]["body"]["execution"]["diagnostics"]
+        self.assertEqual([d["kind"] for d in diags if d["kind"] == "engine-log"], [])
 
 
 # --- limits -----------------------------------------------------------------------
