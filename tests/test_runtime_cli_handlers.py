@@ -70,10 +70,14 @@ class Base(unittest.TestCase):
         self.runs = self.tmp / "runs"
         self.adapter, restore = fake.use()
         self.addCleanup(restore)
+        # COVERAGE_* must ride along or every child this module spawns runs
+        # unmeasured (issue #14's class); the isolated-value keys stay out.
         self.env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                     "HOME": str(self.tmp), "INVESTIGATION_RUNS": str(self.runs),
                     "INVESTIGATION_CONFIG_HOME": str(self.tmp / "cfg"),
-                    "CLAUDE_CODE_ENTRYPOINT": "cli", "FAKE_API_TOKEN": SECRET}
+                    "CLAUDE_CODE_ENTRYPOINT": "cli", "FAKE_API_TOKEN": SECRET,
+                    **{k: v for k, v in os.environ.items()
+                     if k.startswith("COVERAGE_")}}
         # Snapshot EVERY key setUp overwrites, not just INVESTIGATION_*: the
         # suite runs in one process, so a key left stomped leaks into every
         # later module and its children. HOME is the expensive one — children
