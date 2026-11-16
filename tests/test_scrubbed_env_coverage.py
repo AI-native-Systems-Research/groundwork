@@ -163,10 +163,16 @@ class ScrubbedEnvForwardsCoverageKeys(unittest.TestCase):
         #   finding (held PR #73's covsite work); the probe imports
         #   coverage itself and calls process_startup(), which is what the
         #   a1_coverage.pth hook does for a child that can find it.
-        import coverage  # the suite is measured, so this import exists
-        site_dir = os.path.dirname(os.path.dirname(coverage.__file__))
+        # Skip BEFORE importing coverage: ci-local.sh's job_unit explicitly
+        # supports the suite running without coverage installed ("fall back
+        # to a bare run"), and in that mode this module is imported with no
+        # COVERAGE_* in the env — the import below would report
+        # ModuleNotFoundError as an ERROR instead of a skip (same guard
+        # shape as tests/test_check_coverage_floor.py's HAVE_COVERAGE).
         if not _under_coverage():
             self.skipTest("suite not running under coverage")
+        import coverage  # the suite is measured, so this import exists
+        site_dir = os.path.dirname(os.path.dirname(coverage.__file__))
         for module_name in ("tests.test_runtime_recovery",
                             "tests.test_runtime_cli_handlers"):
             with self.subTest(module=module_name):
