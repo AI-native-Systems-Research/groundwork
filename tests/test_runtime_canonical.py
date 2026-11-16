@@ -45,6 +45,12 @@ class CanonicalJson(unittest.TestCase):
         self.assertEqual(C.short_code(d), d[7:19])
         self.assertEqual(len(C.short_code(d)), 12)
 
+    def test_short_code_rejects_non_sha256_digest(self):
+        with self.assertRaises(C.CanonicalError):
+            C.short_code("md5:abc")
+        with self.assertRaises(C.CanonicalError):
+            C.short_code("sha257:" + "ab" * 32)
+
     def test_rejects_non_finite_and_bad_types(self):
         for bad in (float("nan"), float("inf"), {"a": {1, 2}}, {1: "x"}, b"x"):
             with self.assertRaises(C.CanonicalError):
