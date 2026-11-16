@@ -211,6 +211,15 @@ class SpotlightsStaticAdapter(Adapter):
         m = a.get("manifest")
         return m if isinstance(m, dict) else {}
 
+    @classmethod
+    def _spotlights_sha(cls, a: dict):
+        """The manifest's spotlights.commit_sha, or None when anything in the
+        hop drifted. A dict manifest can carry a non-dict spotlights value
+        (a list passes assess's top-level isinstance gate), so this hop goes
+        through the same isinstance shape as every other manifest read."""
+        sp = cls._manifest_dict(a).get("spotlights")
+        return (sp if isinstance(sp, dict) else {}).get("commit_sha")
+
     # --- versions ---------------------------------------------------------------
 
     def _probe(self, ctx) -> dict:
@@ -536,7 +545,11 @@ class SpotlightsStaticAdapter(Adapter):
         issues += [{"source": "manager", "module": None, **{
             k: i.get(k) for k in ("step", "severity", "message", "recoverable")}} for i in mgr]
         a["module_status"], a["issues"] = status, issues
-        outputs = manifest.get("outputs") or {}
+        # outputs is engine-authored manifest JSON: `or {}` only catches
+        # None/absent, so a truthy non-dict (a list) would reach .get and
+        # crash assess — the entry point of classify and collect alike.
+        outputs = manifest.get("outputs")
+        outputs = outputs if isinstance(outputs, dict) else {}
         n = outputs.get("num_candidates")
         report = result.get("report") if isinstance(result.get("report"), dict) else {}
         n_report = len([c for c in report.get("candidates") or [] if isinstance(c, dict)])
@@ -581,9 +594,14 @@ class SpotlightsStaticAdapter(Adapter):
         commit = (record.get("material") or {}).get("target", {}).get("commit")
         # a["manifest"] can be a non-dict on a failed assessment (see
         # _manifest_dict): classify must degrade, not crash — recovery calls
-        # it on every reconcile of an exited invocation.
+        # it on every reconcile of an exited invocation. The same is true of
+        # the manifest's own fields: a dict manifest can carry a non-dict
+        # target (a list passes assess's top-level isinstance gate), so the
+        # hop reads the isinstance shape, never `or {}` — that spelling only
+        # catches None.
         man = self._manifest_dict(a)
-        got = (man.get("target") or {}).get("commit_sha")
+        tgt = man.get("target")
+        got = (tgt if isinstance(tgt, dict) else {}).get("commit_sha")
         if man and commit and got and got != commit:
             a["warnings"].append(f"run_manifest target.commit_sha {got} is not the "
                                  f"prepared commit {commit}")
@@ -664,8 +682,7 @@ class SpotlightsStaticAdapter(Adapter):
             "spend": self.spend(self._manifest_dict(a)),
             "versions": {"engine_sha": (record.get("material") or {}).get(
                 "versions", {}).get("engine_sha"),
-                "manifest_spotlights_commit": (self._manifest_dict(a)
-                                               .get("spotlights") or {}).get("commit_sha")},
+                "manifest_spotlights_commit": self._spotlights_sha(a)},
             "collection": {"state": "not_run", "path": None, "error": None},
             "claims_draft": [], "estimate_guard": {"checked": 0, "violations": []},
             "notes": [],

@@ -893,5 +893,207 @@ class ManifestAndCandidatesShapeDriftTest(unittest.TestCase):
         self.assertEqual(len(sec["claims_draft"]), 3)
 
 
+class SortedCandidatesShapeDriftTest(ManifestAndCandidatesShapeDriftTest):
+    """The sorted_candidates.json candidates shape-drift face (scanner
+    8d94eec3-f44, supervisor directive cycle 93) — the residual of the
+    engine-authored-JSON family the #113/#115/#116 triangle left open.
+
+    sorted_candidates.json is engine-authored JSON nothing validates between
+    the file read and estimate_values' loop over it. A non-list candidates
+    (an int) raised TypeError: 'int' object is not iterable at
+    estimate_values (:231 at main 8d40c69) — and TypeError is neither
+    CouldNotRun nor CollectionError, so it escapes main()'s clause (exit 1,
+    traceback, no collection.json) AND escapes the runtime adapter's
+    containment: adapters/spotlights_static.py calls CS.estimate_values at
+    :682, after collect_run's try/except has already returned. The same
+    call is reachable from results.py:203 (spotlights_estimates).
+
+    ranked_ids (:114) already isinstance-guards its own read of the same
+    key; the fix applies the same idiom to the estimate loop, so a drifted
+    shape lands in the no-candidates tier (the sort scores contribute no
+    forbidden estimate — the guard only ever forbids, so absence is safe)
+    and every candidate still cites.
+
+    Red-at-main status is per test, not shared: only the int test
+    (candidates=7) was red at main 8d40c69 and at PR #116 head 4e17bf3
+    with the exact TypeError (verified by execution before the fix
+    landed). The string test PASSES at main — a string per-character
+    iterates silently, contributing nothing, as its own docstring admits —
+    so it pins the guarded shape, it is not a regression pin.
+    """
+
+    def rewrite_sorted(self, fn):
+        sp = self.run_dir / "sorted" / "sorted_candidates.json"
+        s = json.loads(sp.read_text())
+        fn(s)
+        sp.write_text(json.dumps(s))
+
+    # --- sorted_candidates.json candidates ----------------------------------
+
+    def test_sorted_candidates_int_degrades_to_no_forbidden_estimate(self):
+        """sorted candidates=7 crashed at main with TypeError: 'int' object
+        is not iterable (estimate_values :231), exit 1, traceback, no
+        collection.json. With the guard a non-list candidates reads as a
+        sort with no scores: the claims still draft and cite normally — the
+        estimate guard simply has fewer forbidden values to avoid."""
+        self.rewrite_sorted(lambda s: s.__setitem__("candidates", 7))
+        sec = self.assert_collected(self.run_collect())
+        # the unit face, same spelling the adapter's :682 call and
+        # results.py:203 (spotlights_estimates) would hit
+        self.assertEqual(cs.estimate_values({"candidates": []},
+                                            {"candidates": 7}, {}), set())
+        # a well-formed sort still contributes its scores afterwards
+        self.assertIn("91", cs.estimate_values(
+            {"candidates": []}, {"candidates": [{"score": 91}]}, {}))
+
+    def test_sorted_candidates_string_is_the_same_face(self):
+        """candidates='x' iterates per-character at main (each char fails
+        the isinstance-dict check, so it silently contributes nothing —
+        not a crash, but the loop shape is wrong); with the guard a string
+        also reads as no candidates."""
+        self.rewrite_sorted(lambda s: s.__setitem__("candidates", "x"))
+        sec = self.assert_collected(self.run_collect())
+        self.assertEqual(cs.estimate_values({"candidates": []},
+                                            {"candidates": "x"}, {}), set())
+
+
+class ReportCandidateInnerHopsShapeDriftTest(ManifestAndCandidatesShapeDriftTest):
+    """The inner report-candidate hops the outer guards do not reach
+    (supervisor directive cycle 98, reviewer af4a512c-171) — the residual
+    class the #113/#115/#116/#119 triangle left open after guarding only
+    the OUTER manifest/report blocks.
+
+    A well-typed report can still carry a drifted shape INSIDE a candidate:
+    proposals/locations/spans are engine-authored report JSON nothing
+    validates between the file read and the loops that iterate them
+    (`or []` only catches None/absent, so a truthy non-list — an int —
+    reaches `for` and raises TypeError). TypeError is neither CouldNotRun
+    nor CollectionError, so it escapes main()'s clause exactly like the
+    outer faces: exit 1, traceback, no collection.json — the run is
+    silently uncollectable while its native copies already landed.
+
+    The three sites: estimate_values' proposals loop (:231), first_span's
+    locations loop (:279) and spans loop (:282), and collect()'s
+    cand_summary proposals comprehension (:439). estimate_values is also
+    called by results.py:203 and the adapter (spotlights_static.py),
+    first_span by collect() only. Each test corrupts one inner field of
+    one candidate and pins the degrade contract: exit 0, no traceback,
+    collection.json IS written, and the run-a ranking's other claims
+    (0002/0001/0003) intact.
+    """
+
+    def poison_candidate(self, cid, key, value):
+        rp = self.run_dir / "result.json"
+        r = json.loads(rp.read_text())
+        for c in r["report"]["candidates"]:
+            if c["id"] == cid:
+                c[key] = value
+        rp.write_text(json.dumps(r))
+
+    # --- report candidate proposals (estimate_values + cand_summary) -----
+
+    def test_candidate_proposals_int_degrades_to_no_proposal_estimates(self):
+        """proposals=7 on the top-ranked candidate crashed at main with
+        TypeError: 'int' object is not iterable (estimate_values :231 and
+        the cand_summary comprehension :439 — the same shape one spelling
+        over), exit 1, no collection.json. A non-list proposals reads as no
+        proposals: the estimate guard simply has fewer forbidden values and
+        the summary keeps the candidate with an empty hypothesis list."""
+        self.poison_candidate("cand-toy_cache-0002", "proposals", 7)
+        sec = self.assert_collected(self.run_collect())
+        top = next(t for t in sec["candidates_top"] if t["id"] == "cand-toy_cache-0002")
+        self.assertEqual(top["proposals_are_hypotheses"], [])
+        # the unit face, same spelling results.py:203 (spotlights_estimates)
+        # and the adapter's collect path would hit
+        self.assertEqual(cs.estimate_values(
+            {"candidates": [{"id": "c", "proposals": 7}]}, None, None), set())
+        # a well-formed proposals list still contributes its expected_effect
+        self.assertEqual(cs.estimate_values(
+            {"candidates": [{"id": "c", "proposals":
+                             [{"expected_effect": "TTFT -18%"}]}]}, None, None),
+            {"TTFT -18%"})
+
+    def test_candidate_proposals_string_is_the_same_face(self):
+        """proposals='x' per-character-iterates at main (each char fails the
+        isinstance-dict check, silently contributing nothing — not a crash,
+        but the loop shape is wrong); with the guard a string also reads as
+        no proposals. PASSES at main: shape documentation, not a regression
+        pin (the int test above is the red one)."""
+        self.poison_candidate("cand-toy_cache-0002", "proposals", "x")
+        sec = self.assert_collected(self.run_collect())
+        top = next(t for t in sec["candidates_top"] if t["id"] == "cand-toy_cache-0002")
+        self.assertEqual(top["proposals_are_hypotheses"], [])
+
+    # --- report candidate locations/spans (first_span) --------------------
+    # These poison the RESULT report's candidate; collect() drafts
+    # citations from the same candidate object (first_span is the citation
+    # source, :397), so a drifted locations/spans legitimately costs that
+    # ONE candidate its citation ("no file span to cite" — the existing
+    # degrade tier) while the other two still cite. The contract to pin is
+    # exit 0 + collection.json written + the OTHER claims intact, which
+    # assert_collected_except states.
+
+    def assert_collected_except(self, r, missing):
+        """assert_collected's contract minus the candidates the poison
+        legitimately costs their citation: the rest still cite, in rank
+        order, and the collection is written."""
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertTrue((self.study / "collection.json").is_file(),
+                        "collection.json must be written even when an "
+                        "engine-authored block is in a hostile shape")
+        sec = json.loads((self.study / "collection.json").read_text())["spotlights"]
+        self.assertEqual([c["candidate_id"] for c in sec["claims_draft"]],
+                         [cid for cid in ("cand-toy_cache-0002", "cand-toy_cache-0001",
+                                          "cand-toy_cache-0003") if cid != missing])
+        self.assertIn(f"{missing}: no file span to cite", sec["notes"])
+        return sec
+
+    def test_candidate_locations_int_degrades_to_no_first_span(self):
+        """locations=7 crashed at main with TypeError: 'int' object is not
+        iterable (first_span :279), reached from collect()'s citation loop
+        and cand_summary — exit 1, no collection.json, the run's work lost
+        at the last hop. A non-list locations reads as no location: the
+        candidate keeps its summary row (file/span None) and takes the
+        existing "no file span to cite" tier; the other two still cite."""
+        self.poison_candidate("cand-toy_cache-0002", "locations", 7)
+        sec = self.assert_collected_except(self.run_collect(), "cand-toy_cache-0002")
+        top = next(t for t in sec["candidates_top"] if t["id"] == "cand-toy_cache-0002")
+        self.assertIsNone(top["file"])
+        self.assertIsNone(top["span"])
+        # the unit face, the exact spelling collect()'s loops hit
+        self.assertEqual(cs.first_span({"locations": 7}), (None, None))
+
+    def test_candidate_location_spans_int_is_the_same_face(self):
+        """spans=7 inside a well-formed location (file present) crashed at
+        main with TypeError at first_span :282 — the inner hop of the same
+        loop. Same tier as locations: the poisoned candidate loses only its
+        own citation; the summary row keeps file/span None."""
+        rp = self.run_dir / "result.json"
+        r = json.loads(rp.read_text())
+        for c in r["report"]["candidates"]:
+            if c["id"] == "cand-toy_cache-0002":
+                c["locations"] = [{"file": "toy/cache/policy.py", "spans": 7}]
+        rp.write_text(json.dumps(r))
+        sec = self.assert_collected_except(self.run_collect(), "cand-toy_cache-0002")
+        top = next(t for t in sec["candidates_top"] if t["id"] == "cand-toy_cache-0002")
+        self.assertIsNone(top["file"])
+        self.assertIsNone(top["span"])
+        # a well-formed location still yields its span
+        self.assertEqual(cs.first_span({"locations": [
+            {"file": "f.py", "spans": [{"line_start": 1, "line_end": 2}]}]}),
+            ("f.py", {"line_start": 1, "line_end": 2}))
+
+    def test_candidate_locations_string_is_the_same_face(self):
+        """locations='x' per-character-iterates at main (each char fails the
+        isinstance-dict check — not a crash, but the loop shape is wrong);
+        with the guard a string also reads as no locations. PASSES at main:
+        shape documentation, not a regression pin."""
+        self.poison_candidate("cand-toy_cache-0002", "locations", "x")
+        sec = self.assert_collected_except(self.run_collect(), "cand-toy_cache-0002")
+        top = next(t for t in sec["candidates_top"] if t["id"] == "cand-toy_cache-0002")
+        self.assertIsNone(top["file"])
+
+
 if __name__ == "__main__":
     unittest.main()
