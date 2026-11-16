@@ -133,6 +133,54 @@ class MessageTypes(unittest.TestCase):
         self.assertIn("$.body.task_type: required", errs)
         self.assertNotIn("task_type", m["body"])  # not filled in
 
+    def test_result_block_absence_names_the_block(self):
+        # A result body missing one of its required blocks must name that
+        # block, and the validator must walk past the absent `_V` (the
+        # `if ex:/if oc:/if va:/if sp:` arcs) instead of crashing on None.
+        # The MALFORMED table mutates block contents; it never removes a
+        # block, so these arcs were pinned by nothing. The walk also
+        # produces the follow-on consequences the spec pins: a verdict
+        # with no execution behind it, findings without a completed one.
+        for block, why in (("execution", "$.body.execution: required"),
+                           ("outcome", "$.body.outcome: required"),
+                           ("validation", "$.body.validation: required"),
+                           ("spend", "$.body.spend: required")):
+            with self.subTest(block=block):
+                errs = validate_message(
+                    mutate(VALID["experiment-result"],
+                           lambda m, b=block: m["body"].pop(b)), NOENV)
+                self.assertIn(why, errs)
+        errs = validate_message(
+            mutate(VALID["experiment-result"],
+                   lambda m: m["body"].pop("execution")), NOENV)
+        self.assertTrue(any("needs execution.state completed" in e for e in errs),
+                        errs)
+        self.assertTrue(any(e.startswith("$.body.findings:") for e in errs), errs)
+
+    def test_result_missing_reported_usd_tolerates_the_absent_key(self):
+        # spend.reported_usd is required (keys() reports it), and number()
+        # must exit cleanly on the absent key rather than KeyError — the
+        # arm every reader shares with the other _V accessors.
+        errs = validate_message(
+            mutate(VALID["experiment-result"],
+                   lambda m: m["body"]["spend"].pop("reported_usd")), NOENV)
+        self.assertEqual(errs, ["$.body.spend.reported_usd: required"])
+
+    def test_result_optional_escapes_stay_valid(self):
+        # Two documented escapes no example exercises: an execution whose
+        # exit code is unknown (never recorded by the engine) skips the
+        # integer check, and spend.reported_usd is nullable (unknown spend
+        # is not zero — it is null).
+        for desc, fn in (
+                ("exit_code unknown", lambda m: m["body"]["execution"].update(
+                    exit_code="unknown")),
+                ("null reported_usd", lambda m: m["body"]["spend"].update(
+                    reported_usd=None))):
+            with self.subTest(desc):
+                self.assertEqual(
+                    validate_message(mutate(VALID["experiment-result"], fn), NOENV),
+                    [], desc)
+
 
 class SchemaVersions(unittest.TestCase):
     def test_unsupported_version_rejected(self):
