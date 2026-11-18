@@ -83,6 +83,33 @@ Then record the step in `plan.md`'s `## Step log` (below) and stop. The
 runtime never chains: a result never starts anything. Any further launch is
 a new request, a new preparation, a new card and a new go.
 
+## Clarification (question/answer)
+
+When the request as written can't be prepared faithfully — a field the plan
+assumed is missing or ambiguous — ask the owner in plain words in chat, then
+record the exchange with the `ains.clarification/v1` message pair
+(`runtime-schemas/clarification.v1.json`, examples beside it). Both messages
+go through `RT submit <file>` like any other, carry the work's `work_id`,
+and launch nothing.
+
+- **Question** — `body: {kind: "question", text, fields?[]}`. Submitting it
+  moves the work from `accepted` to `waiting_for_answer`: a clarification is
+  open, and the coordinator waits for the owner before continuing the work
+  (coordinator discipline; see the signal note below).
+- **Answer** — `body: {kind: "answer", text}` with `reply_to` set to the
+  question's `message_id`. It is accepted only as a reply to a clarification
+  question on the same work, and moves the work back to `accepted`. The
+  answer text is the record of what was agreed; when it changes any material
+  field of the request, send a new revision of the request, not just the
+  answer.
+
+`waiting_for_answer` is a signal to the coordinator, not an enforced lock:
+the runtime records the state and reports it (`show`, receipts), and an
+answer — or a new request revision, which supersedes the exchange — moves
+the work back to `accepted`. If the owner's answer changes the request,
+the new revision carries the change; an approval consumed before the
+exchange is not refunded by it.
+
 ## Requests
 
 Envelope: `schema`, `message_id`, `work_id`, `revision` (a new revision
@@ -141,6 +168,7 @@ prepare. Values never appear in any stored record or export.
 | State | Meaning |
 |---|---|
 | `accepted` | reserved or spawning: launch in progress |
+| `waiting_for_answer` | a clarification question is open on this work; no engine state is implied. The owner's answer (with `reply_to` to the question), or a new request revision, moves it back to `accepted` |
 | `running` | engine alive, or exited and not yet classified |
 | `cancel_requested` | a cancel is recorded; the engine is **not** confirmed stopped |
 | `completed` | engine finished on its own terms. A negative, inconclusive or no-opportunity finding is still `completed` |
