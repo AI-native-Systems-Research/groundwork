@@ -243,12 +243,11 @@ def check_query_map(data, where: str) -> dict[str, str]:
 def query_range(base: str, token: str | None, promql: str, start: dt.datetime,
                 end: dt.datetime, step: float) -> tuple[bytes | None, dict | None, str | None]:
     """Return (raw body, parsed JSON, error). error is None on status=success."""
-    body = urllib.parse.urlencode({
+    params = urllib.parse.urlencode({
         "query": promql, "start": f"{start.timestamp():.3f}",
         "end": f"{end.timestamp():.3f}", "step": f"{step:g}",
-    }).encode()
-    req = urllib.request.Request(base + "/api/v1/query_range", data=body, method="POST")
-    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    })
+    req = urllib.request.Request(base + "/api/v1/query_range?" + params, method="GET")
     req.add_header("Accept", "application/json")
     if token:
         req.add_header("Authorization", f"Bearer {token}")

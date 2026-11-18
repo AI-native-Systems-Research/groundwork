@@ -56,12 +56,12 @@ def make_handler(expect_token=None, seen=None):
         def log_message(self, *a):
             pass
 
-        def do_POST(self):
-            if self.path != "/api/v1/query_range":
+        def do_GET(self):
+            url = urllib.parse.urlsplit(self.path)
+            if url.path != "/api/v1/query_range":
                 self.send_error(404)
                 return
-            n = int(self.headers.get("Content-Length") or 0)
-            form = urllib.parse.parse_qs(self.rfile.read(n).decode())
+            form = urllib.parse.parse_qs(url.query)
             if seen is not None:
                 seen.append({"auth": self.headers.get("Authorization"), "form": form})
             if expect_token and self.headers.get("Authorization") != f"Bearer {expect_token}":
@@ -535,9 +535,8 @@ class TestHttpResponseClassification(Base):
             def log_message(self, *a):
                 pass
 
-            def do_POST(self):
-                n = int(self.headers.get("Content-Length") or 0)
-                form = urllib.parse.parse_qs(self.rfile.read(n).decode())
+            def do_GET(self):
+                form = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                 if "vllm_running" in form["query"][0]:
                     code, out = 200, ok
                 else:
@@ -623,9 +622,8 @@ class TestHTTPErrorBodyReadFailure(Base):
             def log_message(self, *a):
                 pass
 
-            def do_POST(self):
-                n = int(self.headers.get("Content-Length") or 0)
-                form = urllib.parse.parse_qs(self.rfile.read(n).decode())
+            def do_GET(self):
+                form = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                 if "vllm_running" in form["query"][0]:
                     code, out = 200, ok
                     self.send_response(code)
@@ -712,9 +710,8 @@ class TestSuccessBodyTruncation(Base):
             def log_message(self, *a):
                 pass
 
-            def do_POST(self):
-                n = int(self.headers.get("Content-Length") or 0)
-                form = urllib.parse.parse_qs(self.rfile.read(n).decode())
+            def do_GET(self):
+                form = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                 if "vllm_running" in form["query"][0]:
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
@@ -1068,9 +1065,8 @@ class TestTokenLeak(Base):
             def log_message(self, *a):
                 pass
 
-            def do_POST(self):
-                n = int(self.headers.get("Content-Length") or 0)
-                form = urllib.parse.parse_qs(self.rfile.read(n).decode())
+            def do_GET(self):
+                form = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                 seen.append(self.headers.get("Authorization"))
                 if "vllm_running" in form["query"][0]:
                     code, out = 200, (FIX / "query_range-vllm_running.json").read_bytes()

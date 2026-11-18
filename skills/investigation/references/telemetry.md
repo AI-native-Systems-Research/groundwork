@@ -124,7 +124,7 @@ the size guard has moved it.
 
 ### `prom/<name>.json`
 
-The body of `POST /api/v1/query_range` (`query`, `start`, `end`, `step`), saved
+The body of `GET /api/v1/query_range` (`query`, `start`, `end`, `step` as URL query parameters), saved
 exactly as received: `{"status":"success","data":{"resultType":"matrix","result":[...]}}`.
 This is the primary evidence. Claims can cite it directly, or cite `summary.json`.
 A successful query's body is byte-for-byte; a failed query's error body is kept
